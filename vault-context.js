@@ -72,7 +72,7 @@ function extractKeywords(text) {
   const quoted = [...text.matchAll(/["“”'`](.{4,80}?)["“”'`]/g)].map((m) => m[1].trim())
   const tech = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z]+[_-][a-z0-9_-]+\b/g) || []
   const proper = text.match(/\b[A-Z][a-záéíóúñ]{2,}\b/g) || []
-  const shortTech = (text.toLowerCase().match(/\b(git|api|rag|llm|mcp|cli|tui|ui|ux|sql|css)\b/g) || [])
+  const shortTech = (text.toLowerCase().match(/\b(git|api|rag|llm|mcp|cli|tui|ui|ux|sql|css|ssh|nas|dvc|n8n|tar|zip|top|npm|yarn|bun|pip|aws|gcp|cpu|gpu|ml|ai|sdk|ide|vim|zsh|bash|fish|pwsh|nix|pr|ci|cd|go|js|ts|py|rb|sh|md|html|xml|json|yaml|yml|toml|ini|cfg|conf|log|env|gitignore|dockerfile|makefile)\b/g) || [])
   const words = (text.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])
     .filter((word) => !STOP.has(word) && !isVerbish(word))
 
@@ -145,12 +145,11 @@ function fuzzyMatchScore(line, keywords) {
 function shouldSearch(text) {
   if (MODE === "off" || OPT_OUT.test(text)) return false
   if (MODE === "force" || FORCE.test(text)) return true
-  if (text.length < 3) return false
-
-  const techTopic = /\b(python|typescript|javascript|react|next|node|docker|kubernetes|postgres|sqlite|redis|rust|golang|java|csharp|ruby|lua|swift|kotlin|haskell|scala|elixir|clojure|terraform|ansible|nginx|apache|graphql|rest|grpc|cuda|ml|ai|llm|openai|anthropic|gemini|pytorch|tensorflow|jupyter|conda|pip|npm|bun|yarn|brew|homebrew|vscode|neovim|vim|zsh|bash|linux|macos|windows|ubuntu|debian|arch|fedora|nix|git|commit|branch|merge|rebase|pr|ci|cd|github|gitlab|bitbucket|tailwind|bootstrap|sass|pnpm|biome|eslint|prettier|turborepo|monorepo|prisma|drizzle|trpc|tanstack|zod|effect|stripe|vercel|cloudflare|aws|azure|gcp|supabase|firebase|planetscale|neon|turso)\b/i
-  const questionAboutMemory = /\b(remember|documented|notes?|obsidian|vault|setup|config|script|skill|plugin|automation|project|git|how did|what did|where is)\b/i
-  const spanishMemory = /\b(recuerda|documentado|notas?|configuracion|configuración|script|habilidad|plugin|automatizacion|automatización|proyecto|git|como funciona|cómo funciona)\b/i
-  return questionAboutMemory.test(text) || spanishMemory.test(text) || techTopic.test(text)
+  if (text.length < 2) return false
+  
+  // Search if we can extract any keywords
+  const keywords = extractKeywords(text)
+  return keywords.length > 0
 }
 
 function vaultRoots() {
