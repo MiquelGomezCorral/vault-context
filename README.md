@@ -2,7 +2,9 @@
 
 Lightweight Obsidian context injector for opencode.
 
-It runs `rg` over selected Markdown folders in the vault on each user message, scores the hits, and prepends a small untrusted context block only when the prompt looks suitable. If `rg` is not installed, it falls back to a small native Markdown scanner.
+It runs `rg` over selected Markdown folders in the vault on each user message, scores the hits, and prepends a small untrusted context block only when the prompt looks suitable. If `rg` is not installed or no exact hit exists, it falls back to a small native Markdown scanner with bounded Levenshtein typo matching.
+
+This is lexical search, not semantic search. `Python` looks for text matches for `Python`; `Pythno` can still match `Python` through typo matching.
 
 ## Setup
 
@@ -29,6 +31,8 @@ Restart opencode.
 - `VAULT_CONTEXT_MODE`: `auto` | `off` | `force`
 - `VAULT_CONTEXT_MAX_HITS`: default `3`
 - `VAULT_CONTEXT_MAX_CHARS`: default `1800`
+- `VAULT_CONTEXT_FUZZY_DISTANCE`: default `3` max; words 5–8 chars use distance 2, 9+ chars use distance 3
+- `VAULT_CONTEXT_NATIVE_MS`: default `600`
 - `VAULT_CONTEXT_DEBUG`: `1` logs decisions
 
 ## Verify

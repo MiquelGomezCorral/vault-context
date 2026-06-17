@@ -14,6 +14,8 @@ const MAX_CHARS = Number(process.env.VAULT_CONTEXT_MAX_CHARS || 1800)
 const MIN_SCORE = Number(process.env.VAULT_CONTEXT_MIN_SCORE || 5)
 const DEBUG = process.env.VAULT_CONTEXT_DEBUG === "1"
 const RG_MS = Number(process.env.VAULT_CONTEXT_RG_MS || 600)
+const NATIVE_MS = Number(process.env.VAULT_CONTEXT_NATIVE_MS || 600)
+const MAX_FUZZY_DISTANCE = Number(process.env.VAULT_CONTEXT_FUZZY_DISTANCE || 3)
 const CACHE_TTL = Number(process.env.VAULT_CONTEXT_CACHE_TTL_MS || 5 * 60_000)
 const CACHE_MAX = Number(process.env.VAULT_CONTEXT_CACHE_MAX || 50)
 
@@ -40,6 +42,7 @@ const STOP = new Set([
   "would", "could", "should", "there", "their", "they", "then", "than", "when", "where", "which", "while",
   "into", "over", "under", "also", "just", "like", "make", "made", "does", "done", "using", "used",
   "because", "since", "such", "very", "more", "most", "some", "many", "much", "get", "got", "add", "fix",
+  "work", "search", "vault", "obsidian", "context",
   "para", "como", "esto", "esta", "estos", "estas", "pero", "porque", "cuando", "donde", "tambien", "también",
   "mismo", "misma", "mucho", "muchos", "poco", "pocos", "puede", "tener", "tiene", "hace", "sobre", "entre",
   "desde", "hasta", "quiero", "necesito", "puedes", "hacer", "agrega", "añade",
@@ -76,6 +79,62 @@ function extractKeywords(text) {
   return [...new Set([...quoted, ...tech, ...proper, ...shortTech, ...bigrams.slice(0, 2), ...words])]
     .filter((word) => word.length >= 4 || shortTech.includes(word))
     .slice(0, 8)
+}
+
+function fuzzyLimit(keyword) {
+  if (keyword.includes(" ") || keyword.includes("_") || keyword.includes("-")) return 0
+  if (keyword.length >= 9) return Math.min(MAX_FUZZY_DISTANCE, 3)
+  if (keyword.length >= 5) return Math.min(MAX_FUZZY_DISTANCE, 2)
+  return 0
+}
+
+function boundedLevenshtein(a, b, max) {
+  if (a === b) return 0
+  if (!max || Math.abs(a.length - b.length) > max) return max + 1
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i += 1) {
+    const curr = [i]
+    let rowMin = curr[0]
+
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      const next = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost,
+      )
+      curr[j] = next
+      if (next < rowMin) rowMin = next
+    }
+
+    if (rowMin > max) return max + 1
+    prev = curr
+  }
+
+  return prev[b.length]
+}
+
+function fuzzyMatchScore(line, keywords) {
+  const tokens = [...new Set(line.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])]
+  if (!tokens.length) return 0
+
+  let score = 0
+  for (const keyword of keywords) {
+    const k = keyword.toLowerCase()
+    const limit = fuzzyLimit(k)
+    if (!limit) continue
+
+    for (const token of tokens) {
+      const distance = boundedLevenshtein(k, token, limit)
+      if (distance <= limit) {
+        score += distance <= 2 ? 3 : 2
+        break
+      }
+    }
+  }
+
+  return score
 }
 
 function shouldSearch(text) {
@@ -129,9 +188,11 @@ function nativeSearch(keywords) {
 
   const lowered = keywords.map((keyword) => keyword.toLowerCase())
   const hits = []
+  const started = Date.now()
   const stack = [...roots].reverse()
 
   while (stack.length) {
+    if (Date.now() - started > NATIVE_MS) break
     const current = stack.pop()
     let stat
     try {
@@ -166,8 +227,10 @@ function nativeSearch(keywords) {
         if (!haystack.includes(keyword)) return score
         return score + (keyword.includes(" ") || keyword.includes("-") || keyword.includes("_") ? 3 : 1)
       }, 0)
-      if (matchScore && (!best || matchScore > best.matchScore)) {
-        best = { file: current, lineNumber: i + 1, text: line.trim(), matchScore }
+      const fuzzyScore = matchScore ? 0 : fuzzyMatchScore(line, lowered)
+      const totalScore = matchScore + fuzzyScore
+      if (totalScore && (!best || totalScore > best.matchScore)) {
+        best = { file: current, lineNumber: i + 1, text: line.trim(), matchScore: totalScore, fuzzy: fuzzyScore > 0 }
       }
     }
     if (best) hits.push(best)
@@ -178,7 +241,7 @@ function nativeSearch(keywords) {
 
 function scoreHit(hit, keywords, forced) {
   const haystack = `${relative(VAULT, hit.file)}\n${hit.text}`.toLowerCase()
-  let score = forced ? 3 : 0
+  let score = (forced ? 3 : 0) + (hit.matchScore || 0)
 
   for (const keyword of keywords) {
     const k = keyword.toLowerCase()
@@ -265,7 +328,6 @@ export default async function VaultContext() {
       }
 
       const rawHits = await ripgrep(keywords)
-      log("raw hits", rawHits.length, rawHits.filter((hit) => relative(VAULT, hit.file).includes("Git")).map((hit) => `${relative(VAULT, hit.file)}:${hit.lineNumber}:${scoreHit(hit, keywords, forced)}`), keywords)
       const hits = bestHits(rawHits, keywords, forced)
       if (!hits.length) {
         log("no hits", keywords)
