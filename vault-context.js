@@ -303,19 +303,13 @@ function pruneCache() {
 }
 
 export default async function VaultContext() {
-  let pendingContext = ""
-
   return {
     event: async ({ event }) => {
       if (event?.type === "session.created") cache.clear()
     },
-    "message.updated": async ({ message }) => {
-      if (!message || message.role !== "user") return
-      const text = (message.parts || [])
-        .filter(p => p?.type === "text")
-        .map(p => p.text || "")
-        .join(" ")
-        .trim()
+    "chat.message": async (input, output) => {
+      const textParts = output.parts.filter(p => p?.type === "text")
+      const text = textParts.map(p => p.text || "").join(" ").trim()
 
       if (!text || !shouldSearch(text)) {
         log("skip", text.slice(0, 80))
@@ -330,7 +324,14 @@ export default async function VaultContext() {
       const cached = cache.get(key)
       const now = Date.now()
       if (cached && now - cached.ts < CACHE_TTL) {
-        pendingContext = cached.text
+        output.parts.unshift({
+          id: "prt_vault-context-" + Date.now(),
+          sessionID: input.sessionID,
+          messageID: output.message.id,
+          type: "text",
+          text: cached.text,
+          synthetic: true,
+        })
         log("cache hit", keywords)
         return
       }
@@ -345,14 +346,15 @@ export default async function VaultContext() {
       const injected = formatHits(hits)
       cache.set(key, { text: injected, ts: now })
       pruneCache()
-      pendingContext = injected
+      output.parts.unshift({
+        id: "prt_vault-context-" + Date.now(),
+        sessionID: input.sessionID,
+        messageID: output.message.id,
+        type: "text",
+        text: injected,
+        synthetic: true,
+      })
       log("injected", hits.map(h => relative(VAULT, h.file) + ":" + h.lineNumber + ":" + h.score))
-    },
-    "experimental.chat.system.transform": async (input, output) => {
-      if (pendingContext) {
-        output.system.push(pendingContext)
-        pendingContext = ""
-      }
     },
   }
 }
