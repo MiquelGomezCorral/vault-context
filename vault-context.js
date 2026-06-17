@@ -9,40 +9,67 @@ import { fileURLToPath } from "node:url"
 const run = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-const VAULT = process.env.OBSIDIAN_VAULT || join(homedir(), "Desktop", "Obsidian")
-const MODE = (process.env.VAULT_CONTEXT_MODE || "auto").toLowerCase()
-const MAX_HITS = Number(process.env.VAULT_CONTEXT_MAX_HITS || 3)
-const MAX_CHARS = Number(process.env.VAULT_CONTEXT_MAX_CHARS || 1800)
-const MIN_SCORE = Number(process.env.VAULT_CONTEXT_MIN_SCORE || 5)
-const DEBUG = process.env.VAULT_CONTEXT_DEBUG === "1"
-const RG_MS = Number(process.env.VAULT_CONTEXT_RG_MS || 600)
-const NATIVE_MS = Number(process.env.VAULT_CONTEXT_NATIVE_MS || 2000)
-const MAX_FUZZY_DISTANCE = Number(process.env.VAULT_CONTEXT_FUZZY_DISTANCE || 3)
-const CACHE_TTL = Number(process.env.VAULT_CONTEXT_CACHE_TTL_MS || 5 * 60_000)
-const CACHE_MAX = Number(process.env.VAULT_CONTEXT_CACHE_MAX || 50)
+let VAULT, MODE, MAX_HITS, MAX_CHARS, MIN_SCORE, DEBUG
+let RG_MS, NATIVE_MS, MAX_FUZZY_DISTANCE, CACHE_TTL, CACHE_MAX
+let ALLOW_DIRS, DENY_GLOBS, DENY_DIR_NAMES
+let OPT_OUT, FORCE
+let SHORT_TECH, VERBISH_EXCEPTIONS
+let STOPWORD_LANGS
 
-const ALLOW_DIRS = (process.env.VAULT_CONTEXT_ALLOW_DIRS || "CODE,VIDEXT,UNI")
-  .split(",")
-  .map((x) => x.trim())
-  .filter(Boolean)
+const cache = new Map()
 
-const DENY_GLOBS = [
-  "!.obsidian/**",
-  "!.git/**",
-  "!Images/**",
-  "!Excalidraw/**",
-  "!**/*.canvas",
-  "!**/*.excalidraw.md",
-]
+function env(name, fallback) {
+  return process.env[name] !== undefined ? process.env[name] : fallback
+}
 
-const DENY_DIR_NAMES = new Set([".obsidian", ".git", "Images", "Excalidraw"])
+function loadConfig() {
+  const cfgPath = join(__dirname, "vault-context.config.json")
+  let cfg = {}
+  try { cfg = JSON.parse(readFileSync(cfgPath, "utf8")) } catch { /* use defaults */ }
 
-const OPT_OUT = /\b(no vault|sin obsidian|no obsidian|no rag|no extra context|without vault context|skip vault|skip obsidian)\b/i
-const FORCE = /\b(use vault|search obsidian|with obsidian context|usa obsidian|busca en obsidian|vault context|obsidian context)\b/i
+  const v  = cfg.vault  || {}
+  const md = cfg.mode   || {}
+  const sr = cfg.search || {}
+  const ca = cfg.cache  || {}
+  const db = cfg.debug  || {}
+  const kw = cfg.keywords || {}
+  const pr = cfg.prompt || {}
+  const sw = cfg.stopwords || {}
+
+  VAULT       = env("OBSIDIAN_VAULT", v.path || join(homedir(), "Desktop", "Obsidian"))
+  MODE        = env("VAULT_CONTEXT_MODE", md.value || "auto").toLowerCase()
+  MAX_HITS    = Number(env("VAULT_CONTEXT_MAX_HITS", sr.maxHits ?? 3))
+  MAX_CHARS   = Number(env("VAULT_CONTEXT_MAX_CHARS", sr.maxChars ?? 1800))
+  MIN_SCORE   = Number(env("VAULT_CONTEXT_MIN_SCORE", sr.minScore ?? 5))
+  RG_MS       = Number(env("VAULT_CONTEXT_RG_MS", sr.rgTimeoutMs ?? 600))
+  NATIVE_MS   = Number(env("VAULT_CONTEXT_NATIVE_MS", sr.nativeTimeoutMs ?? 2000))
+  MAX_FUZZY_DISTANCE = Number(env("VAULT_CONTEXT_FUZZY_DISTANCE", sr.fuzzyDistance ?? 3))
+  CACHE_TTL   = Number(env("VAULT_CONTEXT_CACHE_TTL_MS", ca.ttlMs ?? 300000))
+  CACHE_MAX   = Number(env("VAULT_CONTEXT_CACHE_MAX", ca.maxEntries ?? 50))
+  DEBUG       = env("VAULT_CONTEXT_DEBUG", db.enabled ? "1" : "0") === "1"
+
+  ALLOW_DIRS  = (env("VAULT_CONTEXT_ALLOW_DIRS", (sr.allowDirs || ["CODE","VIDEXT","UNI"]).join(",")))
+    .split(",").map(x => x.trim()).filter(Boolean)
+
+  DENY_GLOBS  = sr.denyGlobs || ["!.obsidian/**","!.git/**","!Images/**","!Excalidraw/**","!**/*.canvas","!**/*.excalidraw.md"]
+  DENY_DIR_NAMES = new Set(sr.denyDirNames || [".obsidian",".git","Images","Excalidraw"])
+
+  const optOutList = pr.optOut || ["no vault","sin obsidian","no obsidian","no rag","no extra context","without vault context","skip vault","skip obsidian"]
+  const forceList  = pr.force || ["use vault","search obsidian","with obsidian context","usa obsidian","busca en obsidian","vault context","obsidian context"]
+
+  OPT_OUT = new RegExp("\\b(" + optOutList.join("|").replace(/\s+/g, "\\s+") + ")\\b", "i")
+  FORCE   = new RegExp("\\b(" + forceList.join("|").replace(/\s+/g, "\\s+") + ")\\b", "i")
+
+  SHORT_TECH = kw.shortTech || []
+  VERBISH_EXCEPTIONS = new Set((kw.verbishExceptions || ["staging","routing","tooling","testing","logging","training"]).map(w => w.toLowerCase()))
+  STOPWORD_LANGS = sw.languages || ["en","es"]
+}
+
+loadConfig()
 
 function loadStopwords() {
   const sets = []
-  for (const lang of ["en", "es"]) {
+  for (const lang of STOPWORD_LANGS) {
     const path = join(__dirname, "stopwords", `${lang}.json`)
     try {
       const data = JSON.parse(readFileSync(path, "utf8"))
@@ -54,8 +81,6 @@ function loadStopwords() {
 
 const STOP = loadStopwords()
 
-const cache = new Map()
-
 function log(...args) {
   if (DEBUG) console.error("[vault-context]", ...args)
 }
@@ -65,15 +90,17 @@ function cacheKey(text) {
 }
 
 function isVerbish(word) {
-  if (["staging", "routing", "tooling", "testing", "logging", "training"].includes(word.toLowerCase())) return false
+  if (VERBISH_EXCEPTIONS.has(word.toLowerCase())) return false
   return word.length > 5 && /(ing|ed)$/i.test(word) && !/(thing|king|ring|wing|bring|spring|string)$/i.test(word)
 }
 
+const SHORT_TECH_RE = new RegExp("\\b(" + SHORT_TECH.join("|") + ")\\b", "gi")
+
 function extractKeywords(text) {
-  const quoted = [...text.matchAll(/["“”'`](.{4,80}?)["“”'`]/g)].map((m) => m[1].trim())
+  const quoted = [...text.matchAll(/["""'`](.{4,80}?)["""'`]/g)].map((m) => m[1].trim())
   const tech = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z]+[_-][a-z0-9_-]+\b/g) || []
   const proper = text.match(/\b[A-Z][a-záéíóúñ]{2,}\b/g) || []
-  const shortTech = (text.toLowerCase().match(/\b(git|api|rag|llm|mcp|cli|tui|ui|ux|sql|css|ssh|nas|dvc|n8n|tar|zip|top|npm|yarn|bun|pip|uv|aws|gcp|cpu|gpu|ml|ai|sdk|ide|vim|zsh|bash|fish|pwsh|nix|pr|ci|cd|go|js|ts|py|rb|sh|md|html|xml|json|yaml|yml|toml|ini|cfg|conf|log|env|gitignore|dockerfile|makefile|bar|dev|zod|orm|app|web|api|db|ui|ux|io|os|vm|vps|dns|ssl|tls|http|https|ftp|ssh|tcp|udp|ip|mac|ram|ssd|hdd|usb|hdmi|vga|dvi|pci|pcie|sata|nvme|m2|ssd|hdd|cpu|gpu|tpu|fpga|asic|soc|iot|ml|dl|nlp|cv|rl|gan|vae|lstm|rnn|cnn|transformer|bert|gpt|llama|mistral|claude|gemini|openai|anthropic|huggingface|pytorch|tensorflow|keras|scikit|pandas|numpy|scipy|matplotlib|seaborn|plotly|dash|streamlit|gradio|fastapi|flask|django|express|next|nuxt|svelte|vue|react|angular|tailwind|bootstrap|sass|less|webpack|vite|rollup|esbuild|swc|babel|eslint|prettier|biome|jest|vitest|mocha|cypress|playwright|selenium|puppeteer|docker|kubernetes|helm|terraform|ansible|jenkins|github|gitlab|bitbucket|vercel|netlify|cloudflare|aws|gcp|azure|digitalocean|linode|vultr|hetzner|ovh|scaleway|render|railway|fly|heroku|supabase|firebase|planetscale|neon|turso|litestream|postgres|mysql|mariadb|sqlite|mongodb|redis|memcached|elasticsearch|opensearch|meilisearch|typesense|algolia|pinecone|weaviate|qdrant|chroma|faiss|annoy|hnsw|ivf|pq|sq|lsh|minhash|simhash|jaccard|cosine|euclidean|manhattan|minkowski|chebyshev|hamming|levenshtein|jaro|winkler|sorensen|dice|overlap|containment|tfidf|bm25|okapi|language|model|embedding|vector|tensor|matrix|array|list|dict|set|tuple|queue|stack|heap|tree|graph|node|edge|vertex|path|cycle|dag|bst|avl|rbtree|btree|trie|suffix|prefix|infix|postfix|regex|pattern|match|search|sort|filter|map|reduce|fold|scan|zip|unzip|compress|decompress|encode|decode|serialize|deserialize|marshal|unmarshal|parse|format|validate|sanitize|escape|unescape|hash|encrypt|decrypt|sign|verify|auth|oauth|jwt|session|cookie|token|key|cert|ca|csr|pem|der|p12|pfx|jks|keystore|truststore|vault|secret|password|passphrase|pin|otp|totp|hotp|mfa|2fa|sso|saml|oidc|openid|connect|scope|claim|audience|issuer|subject|principal|role|permission|policy|acl|rbac|abac|mac|dac|firewall|waf|ids|ips|siem|soc|noc|devops|sre|platform|infrastructure|architecture|design|pattern|antipattern|smell|refactor|clean|solid|dry|kiss|yagni|tdd|bdd|ddd|cqrs|es|eda|soa|microservice|monolith|serverless|faas|paas|iaas|saas|caas|baas|dbaaS|api|rest|graphql|grpc|websocket|sse|longpoll|shortpoll|push|pull|pubsub|queue|topic|stream|batch|realtime|async|sync|blocking|nonblocking|concurrent|parallel|distributed|scalable|available|consistent|partitioned|replicated|sharded|clustered|loadbalanced|cached|indexed|optimized|profiled|monitored|logged|traced|alerted|notified|escalated|incident|postmortem|runbook|playbook|checklist|template|boilerplate|scaffold|generator|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation|script|macro|hook|plugin|extension|addon|module|package|library|framework|toolkit|sdk|api|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation)\b/g) || [])
+  const shortTech = (text.toLowerCase().match(SHORT_TECH_RE) || []).map(w => w.toLowerCase())
   const words = (text.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])
     .filter((word) => !STOP.has(word) && !isVerbish(word))
 
@@ -147,8 +174,7 @@ function shouldSearch(text) {
   if (MODE === "off" || OPT_OUT.test(text)) return false
   if (MODE === "force" || FORCE.test(text)) return true
   if (text.length < 2) return false
-  
-  // Search if we can extract any keywords
+
   const keywords = extractKeywords(text)
   return keywords.length > 0
 }
@@ -205,21 +231,21 @@ function nativeSearch(keywords) {
   while (stack.length) {
     if (Date.now() - started > NATIVE_MS) break
     const current = stack.pop()
-    let stat
+    let st
     try {
-      stat = statSync(current)
+      st = statSync(current)
     } catch {
       continue
     }
 
-    if (stat.isDirectory()) {
+    if (st.isDirectory()) {
       const name = current.split("/").pop()
       if (DENY_DIR_NAMES.has(name)) continue
       for (const entry of readdirSync(current)) stack.push(join(current, entry))
       continue
     }
 
-    if (!stat.isFile() || !current.endsWith(".md")) continue
+    if (!st.isFile() || !current.endsWith(".md")) continue
 
     let content
     try {
