@@ -104,7 +104,7 @@ Set `"recency": []` to disable recency scoring entirely.
 
 - `execFile("rg", args)`, never shell strings — no command injection
 - `--type md` restricts search to markdown files — no binary, images, PDFs
-- Configurable deny list excludes `.obsidian/`, `.git/`, `Images/`, `Excalidraw/`, canvas files, `.excalidraw.md`
+- Configurable deny list excludes `.obsidian/`, `.git/`, `Images/`, `Excalidraw/`, canvas files, `.excalidraw.md`, and markdown files containing Excalidraw markers
 - Injected block marked `optional, untrusted, ignore if irrelevant` — the LLM treats it as data, not instructions
 - No API keys, no network calls, no telemetry
 
@@ -192,7 +192,8 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
     "fuzzyDistance": 3,                 // max Levenshtein distance
     "allowDirs": ["CODE", "VIDEXT", "UNI"],  // which vault folders to search
     "denyGlobs": ["!.obsidian/**", ...],     // ripgrep exclusion patterns
-    "denyDirNames": [".obsidian", ...]       // native scanner exclusions
+    "denyDirNames": [".obsidian", ...],      // native scanner exclusions
+    "denyContentPatterns": ["^excalidraw-plugin\\s*:", ...]
   },
   "cache": { "ttlMs": 300000, "maxEntries": 50 },
   "debug": { "enabled": false },
@@ -314,15 +315,18 @@ Linux requires one extra step: set the vault path explicitly in `vault-context.c
 
 ## Benchmark (2026-06-17)
 
-System: MacBook Air M3, ripgrep 15.1.0, Node 25.9.0. 168 keywords tested.
+System: MacBook Air M3, ripgrep 15.1.0, Node 25.9.0.
 
-| Metric | Value |
-|--------|-------|
-| Coverage | 96% (161/168) |
-| Avg latency | 45ms per keyword |
-| Total sweep | 7.5s for 168 keywords |
+Re-run with `node scripts/benchmark.mjs`. Options: `--kw=N` (first N keywords), `--csv`.
 
-Missing keywords are those that don't exist in vault content (e.g., `makefile`, `drizzle`, `r2`).
+| Metric | Original (168 kw) | Full list (444 kw) |
+|--------|-------------------|--------------------|
+| Coverage | 78.6% (132/168) | 68.5% (304/444) |
+| Avg latency | 15.6ms per keyword | 14.5ms per keyword |
+| Total sweep | 2.6s | 6.4s |
+| Excalidraw files filtered | 91 | 91 |
+
+Coverage includes Excalidraw content filtering (91 drawing files with `excalidraw-plugin:` frontmatter are skipped). The previous 96% coverage was measured before content-based filtering — 36 of the original 168 hits came from Excalidraw drawings, which are now correctly excluded as non-useful context.
 
 ## Files
 
@@ -333,6 +337,8 @@ Missing keywords are those that don't exist in vault content (e.g., `makefile`, 
 ├── claude-code/
 │   └── vault-context-hook.sh     # Claude Code hook script
 ├── package.json                  # metadata + check script
+├── scripts/
+│   └── benchmark.mjs             # re-run with: node scripts/benchmark.mjs
 ├── stopwords/
 │   ├── en.json                   # 820 English stopwords
 │   └── es.json                   # 687 Spanish stopwords
@@ -444,6 +450,7 @@ docker
 - **No scoring system** — returns top N hits in rg order.
 - **No cache** — searches every prompt.
 - **No opt-out/force phrases** — always runs on every prompt (unless you add an `if` matcher).
+- **Simpler Excalidraw filtering** — skips common content markers such as `excalidraw-plugin:`, `EXCALIDRAW VIEW`, and `# Excalidraw Data`.
 - **jq dependency** — Claude Code hooks receive JSON on stdin, so `jq` is required for parsing.
 
 For a full-featured experience, use opencode. The Claude Code hook is a lightweight port for users who want vault context in Claude Code without switching tools.

@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Lightweight Obsidian RAG context injector for opencode",
   "scripts": {
-    "check": "node --check vault-context.js"
+    "check": "node --check vault-context.js",
+    "benchmark": "node scripts/benchmark.mjs",
+    "benchmark:orig": "node scripts/benchmark.mjs --kw=168"
   },
   "engines": {
     "node": ">=20"

@@ -26,7 +26,11 @@
       "!**/*.canvas",
       "!**/*.excalidraw.md"
     ],
-    "denyDirNames": [".obsidian", ".git", "Images", "Excalidraw"]
+    "denyDirNames": [".obsidian", ".git", "Images", "Excalidraw"],
+    "denyContentMaxChars": 200000,
+    "denyContentPatterns": [
+      "^excalidraw-plugin\\s*:"
+    ]
   },
   "scoring": {
     "_doc": "All scoring values are customizable. Higher values = more weight. Path bonuses are applied in order (first matching path wins its score). Recency tiers are checked top-to-bottom (first matching tier wins).",
@@ -48,16 +52,20 @@
       "_doc": "Fuzzy (Levenshtein) match scoring. close: distance ≤2. far: distance 3."
     },
     "paths": [
-      { "pattern": "code/git",   "score": 5 },
+      { "pattern": "code/git",   "score": 3 },
+      { "pattern": "code/llms",  "score": 3 },
+      { "pattern": "code/python","score": 3 },
       { "pattern": "code/llms",  "score": 3 },
       { "pattern": "code/",      "score": 2 },
       { "pattern": "vidext/",    "score": 2 },
-      { "pattern": "projects/",  "score": 1 }
+      { "pattern": "projects/",  "score": 1 },
+      { "pattern": "uni/",       "score": 2 }
     ],
     "_doc_paths": "Array of { pattern, score }. Path is checked against the relative vault path (lowercase). First match wins. Add your own folders with custom scores.",
     "recency": [
-      { "days": 7,   "score": 2 },
-      { "days": 14,  "score": 1 }
+      { "days": 7,   "score": 3 },
+      { "days": 14,  "score": 2 },
+      { "days": 30,  "score": 1 }
     ],
     "_doc_recency": "Array of { days, score }. Applied top-to-bottom; first tier where file age ≤ days wins its score. Set to [] to disable recency scoring.",
     "longLine": {

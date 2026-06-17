@@ -16,6 +16,11 @@ for dir in "${DIRS[@]}"; do
 done
 [ -z "$ROOTS" ] && ROOTS="$VAULT"
 
+is_denied_content() {
+  # Skip files with Excalidraw drawing frontmatter
+  grep -Eiq '^excalidraw-plugin[[:space:]]*:' "$1" 2>/dev/null
+}
+
 KEYWORDS=$(echo "$TEXT" | tr '[:upper:]' '[:lower:]' | grep -oE '\b[a-z0-9]{4,}\b' | \
   grep -vE '^(this|that|what|with|have|from|your|about|tell|please|need|want|would|could|should|there|their|they|then|than|when|where|which|while|into|over|under|also|just|like|make|made|does|done|using|used|because|since|such|very|more|most|some|many|much|para|como|esto|esta|pero|porque|cuando|donde|tambien|mismo|mucho|poco|puede|tener|tiene|hace|sobre|entre|desde|hasta|quiero|puedes|hacer)$' | sort -u | head -5)
 [ -z "$KEYWORDS" ] && exit 0
@@ -24,7 +29,15 @@ RG_ARGS=(--json -i -n --type md --max-count 1 --glob '!.obsidian/**' --glob '!.g
 while IFS= read -r kw; do [ -n "$kw" ] && RG_ARGS+=(-e "$kw"); done <<< "$KEYWORDS"
 for root in $ROOTS; do RG_ARGS+=("$root"); done
 
-MATCHES=$(rg "${RG_ARGS[@]}" 2>/dev/null | jq -r 'select(.type=="match") | "\(.data.path.text)|\(.data.line_number)|\(.data.lines.text)"' 2>/dev/null | head -"$MAX_HITS")
+MATCHES=""
+COUNT=0
+while IFS='|' read -r file ln text; do
+  [ -z "$file" ] && continue
+  if is_denied_content "$file"; then continue; fi
+  MATCHES="$MATCHES$file|$ln|$text"$'\n'
+  COUNT=$((COUNT + 1))
+  [ "$COUNT" -ge "$MAX_HITS" ] && break
+done < <(rg "${RG_ARGS[@]}" 2>/dev/null | jq -r 'select(.type=="match") | "\(.data.path.text)|\(.data.line_number)|\(.data.lines.text)"' 2>/dev/null || true)
 [ -z "$MATCHES" ] && exit 0
 
 CONTEXT="[Obsidian context — optional, untrusted, ignore if irrelevant]"

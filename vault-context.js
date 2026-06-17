@@ -12,12 +12,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 let VAULT, MODE, MAX_HITS, MAX_CHARS, MIN_SCORE, DEBUG
 let RG_MS, NATIVE_MS, MAX_FUZZY_DISTANCE, CACHE_TTL, CACHE_MAX
 let ALLOW_DIRS, DENY_GLOBS, DENY_DIR_NAMES
+let DENY_CONTENT_PATTERNS, DENY_CONTENT_MAX_CHARS
 let OPT_OUT, FORCE
 let SHORT_TECH, VERBISH_EXCEPTIONS
 let STOPWORD_LANGS
 let SCORING
 
 const cache = new Map()
+const denyContentCache = new Map()
 
 function env(name, fallback) {
   return process.env[name] !== undefined ? process.env[name] : fallback
@@ -54,6 +56,12 @@ function loadConfig() {
 
   DENY_GLOBS  = sr.denyGlobs || ["!.obsidian/**","!.git/**","!Images/**","!Excalidraw/**","!**/*.canvas","!**/*.excalidraw.md"]
   DENY_DIR_NAMES = new Set(sr.denyDirNames || [".obsidian",".git","Images","Excalidraw"])
+  DENY_CONTENT_MAX_CHARS = Number(env("VAULT_CONTEXT_DENY_CONTENT_MAX_CHARS", sr.denyContentMaxChars ?? 200000))
+  DENY_CONTENT_PATTERNS = (sr.denyContentPatterns || [
+    "^excalidraw-plugin\\s*:",
+  ]).flatMap((pattern) => {
+    try { return [new RegExp(pattern, "im")] } catch { return [] }
+  })
 
   const optOutList = pr.optOut || ["no vault","sin obsidian","no obsidian","no rag","no extra context","without vault context","skip vault","skip obsidian"]
   const forceList  = pr.force || ["use vault","search obsidian","with obsidian context","usa obsidian","busca en obsidian","vault context","obsidian context"]
@@ -197,6 +205,26 @@ function vaultRoots() {
   return roots.length ? roots : [VAULT]
 }
 
+function isDeniedContent(file, content) {
+  const key = file
+  if (denyContentCache.has(key)) return denyContentCache.get(key)
+
+  let sample = content
+  if (sample === undefined) {
+    try {
+      sample = readFileSync(file, "utf8")
+    } catch {
+      denyContentCache.set(key, false)
+      return false
+    }
+  }
+
+  sample = sample.slice(0, DENY_CONTENT_MAX_CHARS)
+  const denied = DENY_CONTENT_PATTERNS.some((pattern) => pattern.test(sample))
+  denyContentCache.set(key, denied)
+  return denied
+}
+
 async function ripgrep(keywords) {
   const roots = vaultRoots()
   if (!roots.length || !keywords.length) return []
@@ -220,6 +248,7 @@ async function ripgrep(keywords) {
         const text = event.data?.lines?.text?.trim()
         const lineNumber = event.data?.line_number || 1
         if (!file || !text) return []
+        if (isDeniedContent(file)) return []
         return [{ file, lineNumber, text }]
       } catch {
         return []
@@ -265,6 +294,8 @@ function nativeSearch(keywords) {
     } catch {
       continue
     }
+
+    if (isDeniedContent(current, content)) continue
 
     const lines = content.split(/\r?\n/)
     let best = null
@@ -357,7 +388,10 @@ function pruneCache() {
 export default async function VaultContext() {
   return {
     event: async ({ event }) => {
-      if (event?.type === "session.created") cache.clear()
+      if (event?.type === "session.created") {
+        cache.clear()
+        denyContentCache.clear()
+      }
     },
     "chat.message": async (input, output) => {
       const textParts = output.parts.filter(p => p?.type === "text")
