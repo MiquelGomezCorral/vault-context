@@ -32,6 +32,7 @@ const DENY_GLOBS = [
   "!Images/**",
   "!Excalidraw/**",
   "!**/*.canvas",
+  "!**/*.excalidraw.md",
 ]
 
 const DENY_DIR_NAMES = new Set([".obsidian", ".git", "Images", "Excalidraw"])
@@ -72,7 +73,7 @@ function extractKeywords(text) {
   const quoted = [...text.matchAll(/["“”'`](.{4,80}?)["“”'`]/g)].map((m) => m[1].trim())
   const tech = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z]+[_-][a-z0-9_-]+\b/g) || []
   const proper = text.match(/\b[A-Z][a-záéíóúñ]{2,}\b/g) || []
-  const shortTech = (text.toLowerCase().match(/\b(git|api|rag|llm|mcp|cli|tui|ui|ux|sql|css|ssh|nas|dvc|n8n|tar|zip|top|npm|yarn|bun|pip|aws|gcp|cpu|gpu|ml|ai|sdk|ide|vim|zsh|bash|fish|pwsh|nix|pr|ci|cd|go|js|ts|py|rb|sh|md|html|xml|json|yaml|yml|toml|ini|cfg|conf|log|env|gitignore|dockerfile|makefile|bar|dev|zod|orm|app|web|api|db|ui|ux|io|os|vm|vps|dns|ssl|tls|http|https|ftp|ssh|tcp|udp|ip|mac|ram|ssd|hdd|usb|hdmi|vga|dvi|pci|pcie|sata|nvme|m2|ssd|hdd|cpu|gpu|tpu|fpga|asic|soc|iot|ml|dl|nlp|cv|rl|gan|vae|lstm|rnn|cnn|transformer|bert|gpt|llama|mistral|claude|gemini|openai|anthropic|huggingface|pytorch|tensorflow|keras|scikit|pandas|numpy|scipy|matplotlib|seaborn|plotly|dash|streamlit|gradio|fastapi|flask|django|express|next|nuxt|svelte|vue|react|angular|tailwind|bootstrap|sass|less|webpack|vite|rollup|esbuild|swc|babel|eslint|prettier|biome|jest|vitest|mocha|cypress|playwright|selenium|puppeteer|docker|kubernetes|helm|terraform|ansible|jenkins|github|gitlab|bitbucket|vercel|netlify|cloudflare|aws|gcp|azure|digitalocean|linode|vultr|hetzner|ovh|scaleway|render|railway|fly|heroku|supabase|firebase|planetscale|neon|turso|litestream|postgres|mysql|mariadb|sqlite|mongodb|redis|memcached|elasticsearch|opensearch|meilisearch|typesense|algolia|pinecone|weaviate|qdrant|chroma|faiss|annoy|hnsw|ivf|pq|sq|lsh|minhash|simhash|jaccard|cosine|euclidean|manhattan|minkowski|chebyshev|hamming|levenshtein|jaro|winkler|sorensen|dice|overlap|containment|tfidf|bm25|okapi|language|model|embedding|vector|tensor|matrix|array|list|dict|set|tuple|queue|stack|heap|tree|graph|node|edge|vertex|path|cycle|dag|bst|avl|rbtree|btree|trie|suffix|prefix|infix|postfix|regex|pattern|match|search|sort|filter|map|reduce|fold|scan|zip|unzip|compress|decompress|encode|decode|serialize|deserialize|marshal|unmarshal|parse|format|validate|sanitize|escape|unescape|hash|encrypt|decrypt|sign|verify|auth|oauth|jwt|session|cookie|token|key|cert|ca|csr|pem|der|p12|pfx|jks|keystore|truststore|vault|secret|password|passphrase|pin|otp|totp|hotp|mfa|2fa|sso|saml|oidc|openid|connect|scope|claim|audience|issuer|subject|principal|role|permission|policy|acl|rbac|abac|mac|dac|firewall|waf|ids|ips|siem|soc|noc|devops|sre|platform|infrastructure|architecture|design|pattern|antipattern|smell|refactor|clean|solid|dry|kiss|yagni|tdd|bdd|ddd|cqrs|es|eda|soa|microservice|monolith|serverless|faas|paas|iaas|saas|caas|baas|dbaaS|api|rest|graphql|grpc|websocket|sse|longpoll|shortpoll|push|pull|pubsub|queue|topic|stream|batch|realtime|async|sync|blocking|nonblocking|concurrent|parallel|distributed|scalable|available|consistent|partitioned|replicated|sharded|clustered|loadbalanced|cached|indexed|optimized|profiled|monitored|logged|traced|alerted|notified|escalated|incident|postmortem|runbook|playbook|checklist|template|boilerplate|scaffold|generator|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation|script|macro|hook|plugin|extension|addon|module|package|library|framework|toolkit|sdk|api|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation)\b/g) || [])
+  const shortTech = (text.toLowerCase().match(/\b(git|api|rag|llm|mcp|cli|tui|ui|ux|sql|css|ssh|nas|dvc|n8n|tar|zip|top|npm|yarn|bun|pip|uv|aws|gcp|cpu|gpu|ml|ai|sdk|ide|vim|zsh|bash|fish|pwsh|nix|pr|ci|cd|go|js|ts|py|rb|sh|md|html|xml|json|yaml|yml|toml|ini|cfg|conf|log|env|gitignore|dockerfile|makefile|bar|dev|zod|orm|app|web|api|db|ui|ux|io|os|vm|vps|dns|ssl|tls|http|https|ftp|ssh|tcp|udp|ip|mac|ram|ssd|hdd|usb|hdmi|vga|dvi|pci|pcie|sata|nvme|m2|ssd|hdd|cpu|gpu|tpu|fpga|asic|soc|iot|ml|dl|nlp|cv|rl|gan|vae|lstm|rnn|cnn|transformer|bert|gpt|llama|mistral|claude|gemini|openai|anthropic|huggingface|pytorch|tensorflow|keras|scikit|pandas|numpy|scipy|matplotlib|seaborn|plotly|dash|streamlit|gradio|fastapi|flask|django|express|next|nuxt|svelte|vue|react|angular|tailwind|bootstrap|sass|less|webpack|vite|rollup|esbuild|swc|babel|eslint|prettier|biome|jest|vitest|mocha|cypress|playwright|selenium|puppeteer|docker|kubernetes|helm|terraform|ansible|jenkins|github|gitlab|bitbucket|vercel|netlify|cloudflare|aws|gcp|azure|digitalocean|linode|vultr|hetzner|ovh|scaleway|render|railway|fly|heroku|supabase|firebase|planetscale|neon|turso|litestream|postgres|mysql|mariadb|sqlite|mongodb|redis|memcached|elasticsearch|opensearch|meilisearch|typesense|algolia|pinecone|weaviate|qdrant|chroma|faiss|annoy|hnsw|ivf|pq|sq|lsh|minhash|simhash|jaccard|cosine|euclidean|manhattan|minkowski|chebyshev|hamming|levenshtein|jaro|winkler|sorensen|dice|overlap|containment|tfidf|bm25|okapi|language|model|embedding|vector|tensor|matrix|array|list|dict|set|tuple|queue|stack|heap|tree|graph|node|edge|vertex|path|cycle|dag|bst|avl|rbtree|btree|trie|suffix|prefix|infix|postfix|regex|pattern|match|search|sort|filter|map|reduce|fold|scan|zip|unzip|compress|decompress|encode|decode|serialize|deserialize|marshal|unmarshal|parse|format|validate|sanitize|escape|unescape|hash|encrypt|decrypt|sign|verify|auth|oauth|jwt|session|cookie|token|key|cert|ca|csr|pem|der|p12|pfx|jks|keystore|truststore|vault|secret|password|passphrase|pin|otp|totp|hotp|mfa|2fa|sso|saml|oidc|openid|connect|scope|claim|audience|issuer|subject|principal|role|permission|policy|acl|rbac|abac|mac|dac|firewall|waf|ids|ips|siem|soc|noc|devops|sre|platform|infrastructure|architecture|design|pattern|antipattern|smell|refactor|clean|solid|dry|kiss|yagni|tdd|bdd|ddd|cqrs|es|eda|soa|microservice|monolith|serverless|faas|paas|iaas|saas|caas|baas|dbaaS|api|rest|graphql|grpc|websocket|sse|longpoll|shortpoll|push|pull|pubsub|queue|topic|stream|batch|realtime|async|sync|blocking|nonblocking|concurrent|parallel|distributed|scalable|available|consistent|partitioned|replicated|sharded|clustered|loadbalanced|cached|indexed|optimized|profiled|monitored|logged|traced|alerted|notified|escalated|incident|postmortem|runbook|playbook|checklist|template|boilerplate|scaffold|generator|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation|script|macro|hook|plugin|extension|addon|module|package|library|framework|toolkit|sdk|api|cli|tui|gui|web|mobile|desktop|embedded|iot|robotics|automation)\b/g) || [])
   const words = (text.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])
     .filter((word) => !STOP.has(word) && !isVerbish(word))
 
@@ -167,8 +168,12 @@ async function ripgrep(keywords) {
   for (const keyword of keywords) args.push("-e", keyword)
   args.push(...roots)
 
+  log("rg command:", "rg", args.join(" "))
+
   try {
-    const { stdout } = await run("rg", args, { timeout: RG_MS, maxBuffer: 512 * 1024 })
+    const { stdout, stderr } = await run("rg", args, { timeout: RG_MS, maxBuffer: 512 * 1024 })
+    if (stderr) log("rg stderr:", stderr)
+    log("rg stdout length:", stdout.length)
     return stdout.trim().split("\n").filter(Boolean).flatMap((line) => {
       try {
         const event = JSON.parse(line)
@@ -182,7 +187,8 @@ async function ripgrep(keywords) {
         return []
       }
     })
-  } catch {
+  } catch (err) {
+    log("rg error:", err.message)
     return nativeSearch(keywords)
   }
 }
@@ -246,7 +252,7 @@ function nativeSearch(keywords) {
 
 function scoreHit(hit, keywords, forced) {
   const haystack = `${relative(VAULT, hit.file)}\n${hit.text}`.toLowerCase()
-  let score = (forced ? 3 : 0) + (hit.matchScore || 0)
+  let score = (forced ? 3 : 0) + (hit.matchScore || 3)
 
   for (const keyword of keywords) {
     const k = keyword.toLowerCase()
@@ -270,8 +276,9 @@ function scoreHit(hit, keywords, forced) {
 
 function bestHits(hits, keywords, forced) {
   const seen = new Set()
-  return hits
-    .map((hit) => ({ ...hit, score: scoreHit(hit, keywords, forced) }))
+  const scored = hits.map((hit) => ({ ...hit, score: scoreHit(hit, keywords, forced) }))
+  log("scored hits:", scored.map(h => `${relative(VAULT, h.file)}:${h.lineNumber}:${h.score}`))
+  return scored
     .filter((hit) => forced || hit.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score)
     .filter((hit) => {
