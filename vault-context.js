@@ -145,11 +145,12 @@ function fuzzyMatchScore(line, keywords) {
 function shouldSearch(text) {
   if (MODE === "off" || OPT_OUT.test(text)) return false
   if (MODE === "force" || FORCE.test(text)) return true
-  if (text.length < 24) return false
+  if (text.length < 10) return false
 
+  const techTopic = /\b(python|typescript|javascript|react|next|node|docker|kubernetes|postgres|sqlite|redis|rust|golang|java|csharp|ruby|lua|swift|kotlin|haskell|scala|elixir|clojure|terraform|ansible|nginx|apache|graphql|rest|grpc|cuda|ml|ai|llm|openai|anthropic|gemini|pytorch|tensorflow|jupyter|conda|pip|npm|bun|yarn|brew|homebrew|vscode|neovim|vim|zsh|bash|linux|macos|windows|ubuntu|debian|arch|fedora|nix|git|commit|branch|merge|rebase|pr|ci|cd|github|gitlab|bitbucket|tailwind|bootstrap|sass|pnpm|biome|eslint|prettier|turborepo|monorepo|prisma|drizzle|trpc|tanstack|zod|effect|stripe|vercel|cloudflare|aws|azure|gcp|supabase|firebase|planetscale|neon|turso)\b/i
   const questionAboutMemory = /\b(remember|documented|notes?|obsidian|vault|setup|config|script|skill|plugin|automation|project|git|how did|what did|where is)\b/i
   const spanishMemory = /\b(recuerda|documentado|notas?|configuracion|configuración|script|habilidad|plugin|automatizacion|automatización|proyecto|git|como funciona|cómo funciona)\b/i
-  return questionAboutMemory.test(text) || spanishMemory.test(text)
+  return questionAboutMemory.test(text) || spanishMemory.test(text) || techTopic.test(text)
 }
 
 function vaultRoots() {
