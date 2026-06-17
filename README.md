@@ -53,18 +53,52 @@ Source: CODE/LLMs/opencode/setup.md:22
 
 ### Scoring
 
-Every hit gets scored:
+Every hit gets scored. All values are customizable in `vault-context.config.json` under `scoring`.
 
-| Signal | Points |
-|--------|--------|
-| Exact keyword match | +2 per keyword (+3 for multi-word) |
-| Path is in `code/llms` or `code/git` | +2 |
-| Path is in `projects/` | +1 |
-| Note modified in last 14 days | +1 |
-| Forced mode | +3 base score |
-| Line > 260 chars | -1 |
+| Signal | Points | Config key |
+|--------|--------|------------|
+| Base score (rg/fallback result) | +3 | `scoring.baseScore` |
+| Forced mode | +3 | `scoring.forceBonus` |
+| Single keyword match in hit | +2 | `scoring.keywordMatch.single` |
+| Multi-word keyword match in hit | +3 | `scoring.keywordMatch.multiWord` |
+| Keyword bonus in scoreHit | +2 / +3 | `scoring.keywordBonus.single` / `.multiWord` |
+| Fuzzy match (distance ≤2) | +3 | `scoring.fuzzyMatch.close` |
+| Fuzzy match (distance 3) | +2 | `scoring.fuzzyMatch.far` |
+| Path bonus (first match wins) | configurable | `scoring.paths` |
+| Exact keyword in matching folder | +5 (git in code/git) | `scoring.exactKeywordMatch` |
+| Recent note (≤7 days) | +2 | `scoring.recency[0]` |
+| Recent note (≤14 days) | +1 | `scoring.recency[1]` |
+| Long line penalty (>260 chars) | -1 | `scoring.longLine.penalty` |
 
 Hits below `MIN_SCORE` (default 5) are dropped. Per-file dedupe keeps only the best hit per note. Max 3 hits injected, max 1800 chars total.
+
+**Path bonuses** are applied in order — the first matching pattern wins its score. This means you should list more specific patterns before broader ones:
+
+```json
+"scoring": {
+  "paths": [
+    { "pattern": "code/git",    "score": 5 },   // CODE/Git/* gets +5
+    { "pattern": "code/llms",   "score": 3 },   // CODE/LLMs/* gets +3
+    { "pattern": "code/",       "score": 2 },   // everything else in CODE/ gets +2
+    { "pattern": "vidext/",     "score": 2 },   // VIDEXT/* gets +2
+    { "pattern": "projects/",   "score": 1 }    // Projects/* gets +1
+  ]
+}
+```
+
+**Recency tiers** are checked top-to-bottom. The first tier where `fileAge ≤ days` wins:
+
+```json
+"scoring": {
+  "recency": [
+    { "days": 7,   "score": 3 },   // last week
+    { "days": 30,  "score": 1 },   // last month
+    { "days": 90,  "score": 0 }    // last quarter (no bonus)
+  ]
+}
+```
+
+Set `"recency": []` to disable recency scoring entirely.
 
 ### Security
 
@@ -79,6 +113,7 @@ Hits below `MIN_SCORE` (default 5) are dropped. Per-file dedupe keeps only the b
 ### 1. Clone the plugin
 
 ```bash
+# MAKE SURE YOUR PLUGINS FOLDER IS THE CORRECT ONE!
 git clone https://github.com/MiquelGomezCorral/vault-context ~/.config/opencode/plugins/vault-context
 ```
 
@@ -188,7 +223,7 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
 **Search additional vault folders:**
 ```json
 "search": {
-  "allowDirs": ["CODE", "VIDEXT", "UNI", "Personal", "Work"]
+  "allowDirs": ["CODE", "UNI", "Personal", "Work"]
 }
 ```
 
@@ -220,9 +255,25 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
 }
 ```
 
+**Customize scoring for your vault structure:**
+```json
+"scoring": {
+  "paths": [
+    { "pattern": "work/",      "score": 5 },
+    { "pattern": "personal/",  "score": 2 }
+  ],
+  "recency": [
+    { "days": 3,  "score": 5 },
+    { "days": 30, "score": 1 }
+  ],
+  "keywordMatch": { "single": 3, "multiWord": 5 },
+  "minScore": 3
+}
+```
+
 ## Prompt controls
 
-Opt out (no context injected):
+Opt out, no context injected when these phrases are present on the user prompt:
 
 ```text
 no vault

@@ -15,6 +15,7 @@ let ALLOW_DIRS, DENY_GLOBS, DENY_DIR_NAMES
 let OPT_OUT, FORCE
 let SHORT_TECH, VERBISH_EXCEPTIONS
 let STOPWORD_LANGS
+let SCORING
 
 const cache = new Map()
 
@@ -63,6 +64,17 @@ function loadConfig() {
   SHORT_TECH = kw.shortTech || []
   VERBISH_EXCEPTIONS = new Set((kw.verbishExceptions || ["staging","routing","tooling","testing","logging","training"]).map(w => w.toLowerCase()))
   STOPWORD_LANGS = sw.languages || ["en","es"]
+
+  SCORING = cfg.scoring || {}
+  SCORING.baseScore    = SCORING.baseScore ?? 3
+  SCORING.forceBonus   = SCORING.forceBonus ?? 3
+  SCORING.keywordMatch = SCORING.keywordMatch || { single: 2, multiWord: 3 }
+  SCORING.keywordBonus = SCORING.keywordBonus || { single: 2, multiWord: 3 }
+  SCORING.fuzzyMatch   = SCORING.fuzzyMatch   || { close: 3, far: 2 }
+  SCORING.paths         = SCORING.paths        || [{ pattern: "code/git", score: 5 }, { pattern: "code/llms", score: 3 }, { pattern: "code/", score: 2 }, { pattern: "vidext/", score: 2 }, { pattern: "projects/", score: 1 }]
+  SCORING.recency       = SCORING.recency      || [{ days: 7, score: 2 }, { days: 14, score: 1 }]
+  SCORING.longLine      = SCORING.longLine     || { threshold: 260, penalty: 1 }
+  SCORING.exactKeywordMatch = SCORING.exactKeywordMatch || { score: 5, keywords: ["git"] }
 }
 
 loadConfig()
@@ -161,7 +173,7 @@ function fuzzyMatchScore(line, keywords) {
     for (const token of tokens) {
       const distance = boundedLevenshtein(k, token, limit)
       if (distance <= limit) {
-        score += distance <= 2 ? 3 : 2
+        score += distance <= 2 ? SCORING.fuzzyMatch.close : SCORING.fuzzyMatch.far
         break
       }
     }
@@ -262,7 +274,7 @@ function nativeSearch(keywords) {
       const haystack = line.toLowerCase()
       const matchScore = lowered.reduce((score, keyword) => {
         if (!haystack.includes(keyword)) return score
-        return score + (keyword.includes(" ") || keyword.includes("-") || keyword.includes("_") ? 3 : 1)
+        return score + (keyword.includes(" ") || keyword.includes("-") || keyword.includes("_") ? SCORING.keywordMatch.multiWord : SCORING.keywordMatch.single)
       }, 0)
       const fuzzyScore = matchScore ? 0 : fuzzyMatchScore(line, lowered)
       const totalScore = matchScore + fuzzyScore
@@ -278,23 +290,31 @@ function nativeSearch(keywords) {
 
 function scoreHit(hit, keywords, forced) {
   const haystack = `${relative(VAULT, hit.file)}\n${hit.text}`.toLowerCase()
-  let score = (forced ? 3 : 0) + (hit.matchScore || 3)
+  let score = (forced ? SCORING.forceBonus : 0) + (hit.matchScore || SCORING.baseScore)
 
   for (const keyword of keywords) {
     const k = keyword.toLowerCase()
-    if (haystack.includes(k)) score += k.includes(" ") ? 3 : 2
+    if (haystack.includes(k)) score += k.includes(" ") ? SCORING.keywordBonus.multiWord : SCORING.keywordBonus.single
   }
 
   const rel = relative(VAULT, hit.file).toLowerCase()
-  if (rel.includes("code/llms")) score += 2
-  if (rel.includes("code/git")) score += 2
-  if (rel.includes("code/git") && keywords.some((keyword) => keyword.toLowerCase() === "git")) score += 5
-  if (rel.includes("projects/")) score += 1
-  if (hit.text.length > 260) score -= 1
+  for (const entry of SCORING.paths) {
+    if (rel.includes(entry.pattern)) { score += entry.score; break }
+  }
+
+  if (SCORING.exactKeywordMatch.keywords.some(kw => keywords.some(k => k.toLowerCase() === kw.toLowerCase()))) {
+    for (const ekw of SCORING.exactKeywordMatch.keywords) {
+      if (rel.includes(ekw.toLowerCase())) { score += SCORING.exactKeywordMatch.score; break }
+    }
+  }
+
+  if (SCORING.longLine.penalty && hit.text.length > SCORING.longLine.threshold) score -= SCORING.longLine.penalty
 
   try {
     const ageDays = (Date.now() - statSync(hit.file).mtimeMs) / 86_400_000
-    if (ageDays < 14) score += 1
+    for (const tier of (SCORING.recency || [])) {
+      if (ageDays <= tier.days) { score += tier.score; break }
+    }
   } catch {}
 
   return score
