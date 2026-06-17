@@ -264,7 +264,8 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
 "scoring": {
   "paths": [
     { "pattern": "work/",      "score": 5 },
-    { "pattern": "personal/",  "score": 2 }
+    { "pattern": "personal/",  "score": 2 },
+    { "pattern": "llms/",  "score": -4 } //This is content that is already on the agent context so no need to retrieve
   ],
   "recency": [
     { "days": 3,  "score": 5 },

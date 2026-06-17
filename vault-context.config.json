@@ -11,7 +11,7 @@
     "_doc": "auto | off | force. Set VAULT_CONTEXT_MODE env var to override."
   },
   "search": {
-    "maxHits": 3,
+    "maxHits": 20,
     "maxChars": 1800,
     "minScore": 5,
     "rgTimeoutMs": 600,
@@ -55,7 +55,7 @@
     },
     "paths": [
       { "pattern": "code/git",   "score": 3 },
-      { "pattern": "code/llms",  "score": 3 },
+      { "pattern": "code/llms",  "score": -3 },
       { "pattern": "code/python","score": 3 },
       { "pattern": "code/",      "score": 2 },
       { "pattern": "vidext/",    "score": 2 },
