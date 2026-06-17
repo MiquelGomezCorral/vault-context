@@ -6,6 +6,8 @@ It runs `rg` over selected Markdown folders in the vault on each user message, s
 
 This is lexical search, not semantic search. `Python` looks for text matches for `Python`; `Pythno` can still match `Python` through typo matching.
 
+Stopwords are loaded from `stopwords/en.json` and `stopwords/es.json` at startup.
+
 ## Setup
 
 ```bash

@@ -2,10 +2,12 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { join, relative } from "node:path"
+import { dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
+import { fileURLToPath } from "node:url"
 
 const run = promisify(execFile)
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const VAULT = process.env.OBSIDIAN_VAULT || join(homedir(), "Desktop", "Obsidian")
 const MODE = (process.env.VAULT_CONTEXT_MODE || "auto").toLowerCase()
@@ -37,16 +39,19 @@ const DENY_DIR_NAMES = new Set([".obsidian", ".git", "Images", "Excalidraw"])
 const OPT_OUT = /\b(no vault|sin obsidian|no obsidian|no rag|no extra context|without vault context|skip vault|skip obsidian)\b/i
 const FORCE = /\b(use vault|search obsidian|with obsidian context|usa obsidian|busca en obsidian|vault context|obsidian context)\b/i
 
-const STOP = new Set([
-  "this", "that", "what", "with", "have", "from", "your", "about", "tell", "please", "need", "want",
-  "would", "could", "should", "there", "their", "they", "then", "than", "when", "where", "which", "while",
-  "into", "over", "under", "also", "just", "like", "make", "made", "does", "done", "using", "used",
-  "because", "since", "such", "very", "more", "most", "some", "many", "much", "get", "got", "add", "fix",
-  "work", "search", "vault", "obsidian", "context",
-  "para", "como", "esto", "esta", "estos", "estas", "pero", "porque", "cuando", "donde", "tambien", "también",
-  "mismo", "misma", "mucho", "muchos", "poco", "pocos", "puede", "tener", "tiene", "hace", "sobre", "entre",
-  "desde", "hasta", "quiero", "necesito", "puedes", "hacer", "agrega", "añade",
-])
+function loadStopwords() {
+  const sets = []
+  for (const lang of ["en", "es"]) {
+    const path = join(__dirname, "stopwords", `${lang}.json`)
+    try {
+      const data = JSON.parse(readFileSync(path, "utf8"))
+      if (Array.isArray(data.values)) sets.push(...data.values)
+    } catch { /* skip missing file */ }
+  }
+  return new Set(sets)
+}
+
+const STOP = loadStopwords()
 
 const cache = new Map()
 
