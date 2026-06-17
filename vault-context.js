@@ -303,15 +303,17 @@ function pruneCache() {
 }
 
 export default async function VaultContext() {
+  let pendingContext = ""
+
   return {
     event: async ({ event }) => {
       if (event?.type === "session.created") cache.clear()
     },
-    "chat.message": async ({}, { message }) => {
-      const parts = message?.parts || []
-      const text = parts
-        .filter((part) => part?.type === "text")
-        .map((part) => part.text || "")
+    "message.updated": async ({ message }) => {
+      if (!message || message.role !== "user") return
+      const text = (message.parts || [])
+        .filter(p => p?.type === "text")
+        .map(p => p.text || "")
         .join(" ")
         .trim()
 
@@ -324,11 +326,11 @@ export default async function VaultContext() {
       if (!keywords.length) return
 
       const forced = MODE === "force" || FORCE.test(text)
-      const key = cacheKey(`${forced}:${keywords.join("|")}`)
+      const key = cacheKey(forced + ":" + keywords.join("|"))
       const cached = cache.get(key)
       const now = Date.now()
       if (cached && now - cached.ts < CACHE_TTL) {
-        message.parts.unshift({ type: "text", text: cached.text })
+        pendingContext = cached.text
         log("cache hit", keywords)
         return
       }
@@ -343,8 +345,14 @@ export default async function VaultContext() {
       const injected = formatHits(hits)
       cache.set(key, { text: injected, ts: now })
       pruneCache()
-      message.parts.unshift({ type: "text", text: injected })
-      log("injected", hits.map((hit) => `${relative(VAULT, hit.file)}:${hit.lineNumber}:${hit.score}`))
+      pendingContext = injected
+      log("injected", hits.map(h => relative(VAULT, h.file) + ":" + h.lineNumber + ":" + h.score))
+    },
+    "experimental.chat.system.transform": async (input, output) => {
+      if (pendingContext) {
+        output.system.push(pendingContext)
+        pendingContext = ""
+      }
     },
   }
 }
