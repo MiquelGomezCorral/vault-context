@@ -16,7 +16,7 @@ const MAX_CHARS = Number(process.env.VAULT_CONTEXT_MAX_CHARS || 1800)
 const MIN_SCORE = Number(process.env.VAULT_CONTEXT_MIN_SCORE || 5)
 const DEBUG = process.env.VAULT_CONTEXT_DEBUG === "1"
 const RG_MS = Number(process.env.VAULT_CONTEXT_RG_MS || 600)
-const NATIVE_MS = Number(process.env.VAULT_CONTEXT_NATIVE_MS || 600)
+const NATIVE_MS = Number(process.env.VAULT_CONTEXT_NATIVE_MS || 2000)
 const MAX_FUZZY_DISTANCE = Number(process.env.VAULT_CONTEXT_FUZZY_DISTANCE || 3)
 const CACHE_TTL = Number(process.env.VAULT_CONTEXT_CACHE_TTL_MS || 5 * 60_000)
 const CACHE_MAX = Number(process.env.VAULT_CONTEXT_CACHE_MAX || 50)
