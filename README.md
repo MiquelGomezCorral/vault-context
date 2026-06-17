@@ -66,8 +66,9 @@ Every hit gets scored. All values are customizable in `vault-context.config.json
 | Fuzzy match (distance 3) | +2 | `scoring.fuzzyMatch.far` |
 | Path bonus (first match wins) | configurable | `scoring.paths` |
 | Exact keyword in matching folder | +5 (git in code/git) | `scoring.exactKeywordMatch` |
-| Recent note (≤7 days) | +2 | `scoring.recency[0]` |
-| Recent note (≤14 days) | +1 | `scoring.recency[1]` |
+| Recent note (≤7 days) | +3 | `scoring.recency[0]` |
+| Recent note (≤14 days) | +2 | `scoring.recency[1]` |
+| Recent note (≤30 days) | +1 | `scoring.recency[2]` |
 | Long line penalty (>260 chars) | -1 | `scoring.longLine.penalty` |
 
 Hits below `MIN_SCORE` (default 5) are dropped. Per-file dedupe keeps only the best hit per note. Max 3 hits injected, max 1800 chars total.
@@ -92,8 +93,8 @@ Hits below `MIN_SCORE` (default 5) are dropped. Per-file dedupe keeps only the b
 "scoring": {
   "recency": [
     { "days": 7,   "score": 3 },   // last week
-    { "days": 30,  "score": 1 },   // last month
-    { "days": 90,  "score": 0 }    // last quarter (no bonus)
+    { "days": 14,  "score": 2 },   // last two weeks
+    { "days": 30,  "score": 1 }    // last month
   ]
 }
 ```
@@ -104,7 +105,7 @@ Set `"recency": []` to disable recency scoring entirely.
 
 - `execFile("rg", args)`, never shell strings — no command injection
 - `--type md` restricts search to markdown files — no binary, images, PDFs
-- Configurable deny list excludes `.obsidian/`, `.git/`, `Images/`, `Excalidraw/`, canvas files, `.excalidraw.md`, and markdown files containing Excalidraw markers
+- Configurable deny list excludes `.obsidian/`, `.git/`, `Images/`, `Excalidraw/`, canvas files, `.excalidraw.md`, and markdown files containing `excalidraw-plugin:` frontmatter
 - Injected block marked `optional, untrusted, ignore if irrelevant` — the LLM treats it as data, not instructions
 - No API keys, no network calls, no telemetry
 
@@ -184,7 +185,7 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
   "vault": { "path": "" },              // or set OBSIDIAN_VAULT
   "mode":  { "value": "auto" },         // auto | off | force
   "search": {
-    "maxHits": 3,                       // max notes to inject
+    "maxHits": 10,                       // max notes to inject
     "maxChars": 1800,                   // max chars per injection block
     "minScore": 5,                      // minimum relevance score
     "rgTimeoutMs": 600,                 // ripgrep timeout
@@ -193,9 +194,11 @@ All settings live in `vault-context.config.json`. No hardcoded values in the plu
     "allowDirs": ["CODE", "VIDEXT", "UNI"],  // which vault folders to search
     "denyGlobs": ["!.obsidian/**", ...],     // ripgrep exclusion patterns
     "denyDirNames": [".obsidian", ...],      // native scanner exclusions
-    "denyContentPatterns": ["^excalidraw-plugin\\s*:", ...]
+    "denyContentPatterns": ["^excalidraw-plugin\\s*:", ...],
+    "maxFileSize": 5242880,             // skip files larger than 5MB in native scanner
+    "rgMaxBuffer": 1048576              // max buffer for rg output (bytes)
   },
-  "cache": { "ttlMs": 300000, "maxEntries": 50 },
+  "cache": { "ttlMs": 300000, "maxEntries": 50, "maxDenyEntries": 500 },
   "debug": { "enabled": false },
   "keywords": {
     "shortTech": ["git", "docker", "python", ...],  // 300+ tech terms matched regardless of length
@@ -322,8 +325,8 @@ Re-run with `node scripts/benchmark.mjs`. Options: `--kw=N` (first N keywords), 
 | Metric | Original (168 kw) | Full list (444 kw) |
 |--------|-------------------|--------------------|
 | Coverage | 78.6% (132/168) | 68.5% (304/444) |
-| Avg latency | 15.6ms per keyword | 14.5ms per keyword |
-| Total sweep | 2.6s | 6.4s |
+| Avg latency | 21ms per keyword | 18ms per keyword |
+| Total sweep | 3.5s | 7.9s |
 | Excalidraw files filtered | 91 | 91 |
 
 Coverage includes Excalidraw content filtering (91 drawing files with `excalidraw-plugin:` frontmatter are skipped). The previous 96% coverage was measured before content-based filtering — 36 of the original 168 hits came from Excalidraw drawings, which are now correctly excluded as non-useful context.
@@ -332,16 +335,18 @@ Coverage includes Excalidraw content filtering (91 drawing files with `excalidra
 
 ```
 ~/.config/opencode/plugins/vault-context/
-├── vault-context.js              # opencode plugin (ESM)
+├── vault-context.js              # opencode plugin (ESM class)
 ├── vault-context.config.json     # all settings (edit this)
+├── vault-context.schema.json     # JSON Schema for IDE validation
 ├── claude-code/
 │   └── vault-context-hook.sh     # Claude Code hook script
-├── package.json                  # metadata + check script
 ├── scripts/
 │   └── benchmark.mjs             # re-run with: node scripts/benchmark.mjs
 ├── stopwords/
 │   ├── en.json                   # 820 English stopwords
 │   └── es.json                   # 687 Spanish stopwords
+├── LICENSE                       # MIT
+├── .npmignore
 ├── .gitignore
 └── README.md
 ```
@@ -449,8 +454,9 @@ docker
 - **No stopword filtering** — basic stopword list baked into the bash script.
 - **No scoring system** — returns top N hits in rg order.
 - **No cache** — searches every prompt.
-- **No opt-out/force phrases** — always runs on every prompt (unless you add an `if` matcher).
-- **Simpler Excalidraw filtering** — skips common content markers such as `excalidraw-plugin:`, `EXCALIDRAW VIEW`, and `# Excalidraw Data`.
+- **Basic opt-out/force phrase support** — baked into the hook script with the same defaults as the config.
+- **Excalidraw filtering** — skips files with `excalidraw-plugin:` frontmatter.
 - **jq dependency** — Claude Code hooks receive JSON on stdin, so `jq` is required for parsing.
+- **Tab-delimited output** — file paths may not contain tab characters (unlikely in Obsidian).
 
 For a full-featured experience, use opencode. The Claude Code hook is a lightweight port for users who want vault context in Claude Code without switching tools.

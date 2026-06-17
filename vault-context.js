@@ -9,438 +9,557 @@ import { fileURLToPath } from "node:url"
 const run = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-let VAULT, MODE, MAX_HITS, MAX_CHARS, MIN_SCORE, DEBUG
-let RG_MS, NATIVE_MS, MAX_FUZZY_DISTANCE, CACHE_TTL, CACHE_MAX
-let ALLOW_DIRS, DENY_GLOBS, DENY_DIR_NAMES
-let DENY_CONTENT_PATTERNS, DENY_CONTENT_MAX_CHARS
-let OPT_OUT, FORCE
-let SHORT_TECH, VERBISH_EXCEPTIONS
-let STOPWORD_LANGS
-let SCORING
+class VaultContextPlugin {
+  #cfg = null
+  #resultCache = new Map()
+  #denyCache = new Map()
+  #denyOrder = []
+  #STOP = new Set()
+  #shortTechRe = null
 
-const cache = new Map()
-const denyContentCache = new Map()
-
-function env(name, fallback) {
-  return process.env[name] !== undefined ? process.env[name] : fallback
-}
-
-function loadConfig() {
-  const cfgPath = join(__dirname, "vault-context.config.json")
-  let cfg = {}
-  try { cfg = JSON.parse(readFileSync(cfgPath, "utf8")) } catch { /* use defaults */ }
-
-  const v  = cfg.vault  || {}
-  const md = cfg.mode   || {}
-  const sr = cfg.search || {}
-  const ca = cfg.cache  || {}
-  const db = cfg.debug  || {}
-  const kw = cfg.keywords || {}
-  const pr = cfg.prompt || {}
-  const sw = cfg.stopwords || {}
-
-  VAULT       = env("OBSIDIAN_VAULT", v.path || join(homedir(), "Desktop", "Obsidian"))
-  MODE        = env("VAULT_CONTEXT_MODE", md.value || "auto").toLowerCase()
-  MAX_HITS    = Number(env("VAULT_CONTEXT_MAX_HITS", sr.maxHits ?? 3))
-  MAX_CHARS   = Number(env("VAULT_CONTEXT_MAX_CHARS", sr.maxChars ?? 1800))
-  MIN_SCORE   = Number(env("VAULT_CONTEXT_MIN_SCORE", sr.minScore ?? 5))
-  RG_MS       = Number(env("VAULT_CONTEXT_RG_MS", sr.rgTimeoutMs ?? 600))
-  NATIVE_MS   = Number(env("VAULT_CONTEXT_NATIVE_MS", sr.nativeTimeoutMs ?? 2000))
-  MAX_FUZZY_DISTANCE = Number(env("VAULT_CONTEXT_FUZZY_DISTANCE", sr.fuzzyDistance ?? 3))
-  CACHE_TTL   = Number(env("VAULT_CONTEXT_CACHE_TTL_MS", ca.ttlMs ?? 300000))
-  CACHE_MAX   = Number(env("VAULT_CONTEXT_CACHE_MAX", ca.maxEntries ?? 50))
-  DEBUG       = env("VAULT_CONTEXT_DEBUG", db.enabled ? "1" : "0") === "1"
-
-  ALLOW_DIRS  = (env("VAULT_CONTEXT_ALLOW_DIRS", (sr.allowDirs || ["CODE","VIDEXT","UNI"]).join(",")))
-    .split(",").map(x => x.trim()).filter(Boolean)
-
-  DENY_GLOBS  = sr.denyGlobs || ["!.obsidian/**","!.git/**","!Images/**","!Excalidraw/**","!**/*.canvas","!**/*.excalidraw.md"]
-  DENY_DIR_NAMES = new Set(sr.denyDirNames || [".obsidian",".git","Images","Excalidraw"])
-  DENY_CONTENT_MAX_CHARS = Number(env("VAULT_CONTEXT_DENY_CONTENT_MAX_CHARS", sr.denyContentMaxChars ?? 200000))
-  DENY_CONTENT_PATTERNS = (sr.denyContentPatterns || [
-    "^excalidraw-plugin\\s*:",
-  ]).flatMap((pattern) => {
-    try { return [new RegExp(pattern, "im")] } catch { return [] }
-  })
-
-  const optOutList = pr.optOut || ["no vault","sin obsidian","no obsidian","no rag","no extra context","without vault context","skip vault","skip obsidian"]
-  const forceList  = pr.force || ["use vault","search obsidian","with obsidian context","usa obsidian","busca en obsidian","vault context","obsidian context"]
-
-  OPT_OUT = new RegExp("\\b(" + optOutList.join("|").replace(/\s+/g, "\\s+") + ")\\b", "i")
-  FORCE   = new RegExp("\\b(" + forceList.join("|").replace(/\s+/g, "\\s+") + ")\\b", "i")
-
-  SHORT_TECH = kw.shortTech || []
-  VERBISH_EXCEPTIONS = new Set((kw.verbishExceptions || ["staging","routing","tooling","testing","logging","training"]).map(w => w.toLowerCase()))
-  STOPWORD_LANGS = sw.languages || ["en","es"]
-
-  SCORING = cfg.scoring || {}
-  SCORING.baseScore    = SCORING.baseScore ?? 3
-  SCORING.forceBonus   = SCORING.forceBonus ?? 3
-  SCORING.keywordMatch = SCORING.keywordMatch || { single: 2, multiWord: 3 }
-  SCORING.keywordBonus = SCORING.keywordBonus || { single: 2, multiWord: 3 }
-  SCORING.fuzzyMatch   = SCORING.fuzzyMatch   || { close: 3, far: 2 }
-  SCORING.paths         = SCORING.paths        || [{ pattern: "code/git", score: 5 }, { pattern: "code/llms", score: 3 }, { pattern: "code/", score: 2 }, { pattern: "vidext/", score: 2 }, { pattern: "projects/", score: 1 }]
-  SCORING.recency       = SCORING.recency      || [{ days: 7, score: 2 }, { days: 14, score: 1 }]
-  SCORING.longLine      = SCORING.longLine     || { threshold: 260, penalty: 1 }
-  SCORING.exactKeywordMatch = SCORING.exactKeywordMatch || { score: 5, keywords: ["git"] }
-}
-
-loadConfig()
-
-function loadStopwords() {
-  const sets = []
-  for (const lang of STOPWORD_LANGS) {
-    const path = join(__dirname, "stopwords", `${lang}.json`)
-    try {
-      const data = JSON.parse(readFileSync(path, "utf8"))
-      if (Array.isArray(data.values)) sets.push(...data.values)
-    } catch { /* skip missing file */ }
-  }
-  return new Set(sets)
-}
-
-const STOP = loadStopwords()
-
-function log(...args) {
-  if (DEBUG) console.error("[vault-context]", ...args)
-}
-
-function cacheKey(text) {
-  return createHash("sha1").update(text).digest("hex").slice(0, 16)
-}
-
-function isVerbish(word) {
-  if (VERBISH_EXCEPTIONS.has(word.toLowerCase())) return false
-  return word.length > 5 && /(ing|ed)$/i.test(word) && !/(thing|king|ring|wing|bring|spring|string)$/i.test(word)
-}
-
-const SHORT_TECH_RE = new RegExp("\\b(" + SHORT_TECH.join("|") + ")\\b", "gi")
-
-function extractKeywords(text) {
-  const quoted = [...text.matchAll(/["""'`](.{4,80}?)["""'`]/g)].map((m) => m[1].trim())
-  const tech = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z]+[_-][a-z0-9_-]+\b/g) || []
-  const proper = text.match(/\b[A-Z][a-záéíóúñ]{2,}\b/g) || []
-  const shortTech = (text.toLowerCase().match(SHORT_TECH_RE) || []).map(w => w.toLowerCase())
-  const words = (text.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])
-    .filter((word) => !STOP.has(word) && !isVerbish(word))
-
-  const bigrams = []
-  for (let i = 0; i < words.length - 1; i += 1) {
-    bigrams.push(`${words[i]} ${words[i + 1]}`)
+  constructor() {
+    this.loadConfig()
   }
 
-  return [...new Set([...quoted, ...tech, ...proper, ...shortTech, ...bigrams.slice(0, 2), ...words])]
-    .filter((word) => word.length >= 4 || shortTech.includes(word))
-    .slice(0, 8)
-}
+  // ---------------------------------------------------------------------------
+  // Config
+  // ---------------------------------------------------------------------------
 
-function fuzzyLimit(keyword) {
-  if (keyword.includes(" ") || keyword.includes("_") || keyword.includes("-")) return 0
-  if (keyword.length >= 9) return Math.min(MAX_FUZZY_DISTANCE, 3)
-  if (keyword.length >= 5) return Math.min(MAX_FUZZY_DISTANCE, 2)
-  return 0
-}
-
-function boundedLevenshtein(a, b, max) {
-  if (a === b) return 0
-  if (!max || Math.abs(a.length - b.length) > max) return max + 1
-
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
-  for (let i = 1; i <= a.length; i += 1) {
-    const curr = [i]
-    let rowMin = curr[0]
-
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      const next = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + cost,
-      )
-      curr[j] = next
-      if (next < rowMin) rowMin = next
+  loadConfig() {
+    const cfgPath = join(__dirname, "vault-context.config.json")
+    let raw = {}
+    try { raw = JSON.parse(readFileSync(cfgPath, "utf8")) } catch (e) {
+      console.warn("[vault-context] cannot read config:", e.message)
     }
 
-    if (rowMin > max) return max + 1
-    prev = curr
-  }
+    const v = raw.vault || {}
+    const md = raw.mode || {}
+    const sr = raw.search || {}
+    const ca = raw.cache || {}
+    const db = raw.debug || {}
+    const kw = raw.keywords || {}
+    const pr = raw.prompt || {}
+    const sw = raw.stopwords || {}
+    const sk = raw.scoring || {}
 
-  return prev[b.length]
-}
+    const env = (name, fallback) =>
+      process.env[name] !== undefined ? process.env[name] : fallback
 
-function fuzzyMatchScore(line, keywords) {
-  const tokens = [...new Set(line.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/g) || [])]
-  if (!tokens.length) return 0
-
-  let score = 0
-  for (const keyword of keywords) {
-    const k = keyword.toLowerCase()
-    const limit = fuzzyLimit(k)
-    if (!limit) continue
-
-    for (const token of tokens) {
-      const distance = boundedLevenshtein(k, token, limit)
-      if (distance <= limit) {
-        score += distance <= 2 ? SCORING.fuzzyMatch.close : SCORING.fuzzyMatch.far
-        break
-      }
+    const sc = {
+      baseScore: sk.baseScore ?? 3,
+      forceBonus: sk.forceBonus ?? 3,
+      keywordMatch: sk.keywordMatch || { single: 2, multiWord: 3 },
+      keywordBonus: sk.keywordBonus || { single: 2, multiWord: 3 },
+      fuzzyMatch: sk.fuzzyMatch || { close: 3, far: 2 },
+      paths: sk.paths || [
+        { pattern: "code/git", score: 5 },
+        { pattern: "code/llms", score: 3 },
+        { pattern: "code/", score: 2 },
+        { pattern: "vidext/", score: 2 },
+        { pattern: "projects/", score: 1 },
+      ],
+      recency: sk.recency || [
+        { days: 7, score: 2 },
+        { days: 14, score: 1 },
+      ],
+      longLine: sk.longLine || { threshold: 260, penalty: 1 },
+      exactKeywordMatch: sk.exactKeywordMatch || { score: 5, keywords: ["git"] },
     }
-  }
 
-  return score
-}
-
-function shouldSearch(text) {
-  if (MODE === "off" || OPT_OUT.test(text)) return false
-  if (MODE === "force" || FORCE.test(text)) return true
-  if (text.length < 2) return false
-
-  const keywords = extractKeywords(text)
-  return keywords.length > 0
-}
-
-function vaultRoots() {
-  if (!existsSync(VAULT)) return []
-  const roots = ALLOW_DIRS.map((dir) => join(VAULT, dir)).filter((dir) => existsSync(dir))
-  return roots.length ? roots : [VAULT]
-}
-
-function isDeniedContent(file, content) {
-  const key = file
-  if (denyContentCache.has(key)) return denyContentCache.get(key)
-
-  let sample = content
-  if (sample === undefined) {
-    try {
-      sample = readFileSync(file, "utf8")
-    } catch {
-      denyContentCache.set(key, false)
-      return false
+    this.#cfg = {
+      vault: { path: env("OBSIDIAN_VAULT", v.path || join(homedir(), "Desktop", "Obsidian")) },
+      mode: { value: env("VAULT_CONTEXT_MODE", md.value || "auto").toLowerCase() },
+      search: {
+        maxHits: Math.max(1, Number(env("VAULT_CONTEXT_MAX_HITS", sr.maxHits ?? 3))),
+        maxChars: Math.max(100, Number(env("VAULT_CONTEXT_MAX_CHARS", sr.maxChars ?? 1800))),
+        minScore: Math.max(0, Number(env("VAULT_CONTEXT_MIN_SCORE", sr.minScore ?? 5))),
+        rgTimeoutMs: Math.max(100, Number(env("VAULT_CONTEXT_RG_MS", sr.rgTimeoutMs ?? 600))),
+        nativeTimeoutMs: Math.max(100, Number(env("VAULT_CONTEXT_NATIVE_MS", sr.nativeTimeoutMs ?? 2000))),
+        fuzzyDistance: Math.max(0, Number(env("VAULT_CONTEXT_FUZZY_DISTANCE", sr.fuzzyDistance ?? 3))),
+        allowDirs: (env("VAULT_CONTEXT_ALLOW_DIRS", (sr.allowDirs || ["CODE", "VIDEXT", "UNI"]).join(","))).split(",").map(x => x.trim()).filter(Boolean),
+        denyGlobs: sr.denyGlobs || ["!.obsidian/**", "!.git/**", "!Images/**", "!Excalidraw/**", "!**/*.canvas", "!**/*.excalidraw.md"],
+        denyDirNames: new Set(sr.denyDirNames || [".obsidian", ".git", "Images", "Excalidraw"]),
+        denyContentMaxChars: Math.max(1000, sr.denyContentMaxChars ?? 200000),
+        denyContentPatterns: (sr.denyContentPatterns || ["^excalidraw-plugin\\s*:"]).flatMap(p => {
+          try { return [new RegExp(p, "im")] } catch { return [] }
+        }),
+        maxFileSize: Math.max(0, sr.maxFileSize ?? 5242880),
+        rgMaxBuffer: Math.max(65536, sr.rgMaxBuffer ?? 1048576),
+      },
+      cache: {
+        ttlMs: Math.max(0, Number(env("VAULT_CONTEXT_CACHE_TTL_MS", ca.ttlMs ?? 300000))),
+        maxEntries: Math.max(1, Number(env("VAULT_CONTEXT_CACHE_MAX", ca.maxEntries ?? 50))),
+        maxDenyEntries: Math.max(1, ca.maxDenyEntries ?? 500),
+      },
+      debug: db.enabled === true || env("VAULT_CONTEXT_DEBUG", "0") === "1",
+      keywords: {
+        shortTech: kw.shortTech || [],
+        verbishExceptions: new Set(
+          (kw.verbishExceptions || ["staging", "routing", "tooling", "testing", "logging", "training"]).map(w => w.toLowerCase())
+        ),
+      },
+      prompt: {
+        optOut: new RegExp(
+          "\\b(" + (pr.optOut || ["no vault", "sin obsidian", "no obsidian", "no rag", "no extra context", "without vault context", "skip vault", "skip obsidian"]).join("|").replace(/\s+/g, "\\s+") + ")\\b",
+          "i"
+        ),
+        force: new RegExp(
+          "\\b(" + (pr.force || ["use vault", "search obsidian", "with obsidian context", "usa obsidian", "busca en obsidian", "vault context", "obsidian context"]).join("|").replace(/\s+/g, "\\s+") + ")\\b",
+          "i"
+        ),
+      },
+      stopwords: sw.languages || ["en", "es"],
+      scoring: sc,
     }
+
+    this.#shortTechRe = this.#buildShortTechRe()
+    for (const w of this.#validateConfig(raw)) this.#log("warn:", w)
+    this.#loadStopwords()
+    this.#log("config loaded")
   }
 
-  sample = sample.slice(0, DENY_CONTENT_MAX_CHARS)
-  const denied = DENY_CONTENT_PATTERNS.some((pattern) => pattern.test(sample))
-  denyContentCache.set(key, denied)
-  return denied
-}
+  #buildShortTechRe() {
+    const escaped = this.#cfg.keywords.shortTech.map(kw =>
+      kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    )
+    if (!escaped.length) return null
+    try { return new RegExp("\\b(" + escaped.join("|") + ")\\b", "gi") } catch { return null }
+  }
 
-async function ripgrep(keywords) {
-  const roots = vaultRoots()
-  if (!roots.length || !keywords.length) return []
+  #validateConfig(raw) {
+    const w = []
+    if (!existsSync(this.#cfg.vault.path)) w.push("vault path not found: " + this.#cfg.vault.path)
+    const patterns = raw.search?.denyContentPatterns || []
+    patterns.forEach((p, i) => {
+      try { new RegExp(p, "im") } catch (e) { w.push("denyContentPatterns[" + i + "] invalid: " + e.message) }
+    })
+    if (!["auto", "off", "force"].includes(this.#cfg.mode.value))
+      w.push("invalid mode \"" + this.#cfg.mode.value + "\", expected auto|off|force")
+    return w
+  }
 
-  const args = ["--json", "-i", "-n", "--type", "md", "--max-count", "1"]
-  for (const glob of DENY_GLOBS) args.push("--glob", glob)
-  for (const keyword of keywords) args.push("-e", keyword)
-  args.push(...roots)
-
-  log("rg command:", "rg", args.join(" "))
-
-  try {
-    const { stdout, stderr } = await run("rg", args, { timeout: RG_MS, maxBuffer: 512 * 1024 })
-    if (stderr) log("rg stderr:", stderr)
-    log("rg stdout length:", stdout.length)
-    return stdout.trim().split("\n").filter(Boolean).flatMap((line) => {
+  #loadStopwords() {
+    this.#STOP = new Set()
+    for (const lang of this.#cfg.stopwords) {
       try {
-        const event = JSON.parse(line)
-        if (event.type !== "match") return []
-        const file = event.data?.path?.text
-        const text = event.data?.lines?.text?.trim()
-        const lineNumber = event.data?.line_number || 1
-        if (!file || !text) return []
-        if (isDeniedContent(file)) return []
-        return [{ file, lineNumber, text }]
-      } catch {
-        return []
+        const data = JSON.parse(readFileSync(join(__dirname, "stopwords", lang + ".json"), "utf8"))
+        if (Array.isArray(data.values)) data.values.forEach(v => this.#STOP.add(v))
+      } catch (e) {
+        this.#log("warn: cannot load stopwords/" + lang + ".json:", e.message)
       }
-    })
-  } catch (err) {
-    log("rg error:", err.message)
-    return nativeSearch(keywords)
+    }
   }
-}
 
-function nativeSearch(keywords) {
-  const roots = vaultRoots()
-  if (!roots.length || !keywords.length) return []
+  // ---------------------------------------------------------------------------
+  // Logging
+  // ---------------------------------------------------------------------------
 
-  const lowered = keywords.map((keyword) => keyword.toLowerCase())
-  const hits = []
-  const started = Date.now()
-  const stack = [...roots].reverse()
+  #log(...args) {
+    if (this.#cfg?.debug) console.error("[vault-context]", ...args)
+  }
 
-  while (stack.length) {
-    if (Date.now() - started > NATIVE_MS) break
-    const current = stack.pop()
-    let st
+  // ---------------------------------------------------------------------------
+  // Keyword extraction
+  // ---------------------------------------------------------------------------
+
+  #isVerbish(word) {
+    const w = word.toLowerCase()
+    if (this.#cfg.keywords.verbishExceptions.has(w)) return false
+    return word.length > 5 && /(ing|ed)$/i.test(word) && !/(thing|king|ring|wing|bring|spring|string)$/i.test(word)
+  }
+
+  #extractKeywords(text) {
+    const quoted = [...text.matchAll(/[""''`](.{4,80}?)[""''`]/g)].map(m => m[1].trim())
+    const tech = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b|\b[a-z]+[_-][a-z0-9_-]+\b/g) || []
+    const proper = text.match(/\b[A-Z][a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1]{2,}\b/g) || []
+    const shortTech = this.#shortTechRe ? (text.toLowerCase().match(this.#shortTechRe) || []).map(w => w.toLowerCase()) : []
+    const words = (text.toLowerCase().match(/[a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f10-9]{4,}/g) || [])
+      .filter(w => !this.#STOP.has(w) && !this.#isVerbish(w))
+
+    const bigrams = []
+    for (let i = 0; i < words.length - 1; i++) bigrams.push(words[i] + " " + words[i + 1])
+
+    return [...new Set([...quoted, ...tech, ...proper, ...shortTech, ...bigrams.slice(0, 2), ...words])]
+      .filter(w => w.length >= 4 || shortTech.includes(w))
+      .slice(0, 8)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Search decision
+  // ---------------------------------------------------------------------------
+
+  #shouldSearch(text) {
+    const m = this.#cfg.mode.value
+    if (m === "off" || this.#cfg.prompt.optOut.test(text)) return false
+    if (m === "force" || this.#cfg.prompt.force.test(text)) return true
+    if (text.length < 2) return false
+    return this.#extractKeywords(text).length > 0
+  }
+
+  #vaultRoots() {
+    const v = this.#cfg.vault.path
+    if (!existsSync(v)) return []
+    const roots = this.#cfg.search.allowDirs.map(d => join(v, d)).filter(d => existsSync(d))
+    return roots.length ? roots : [v]
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content-based file exclusion
+  // ---------------------------------------------------------------------------
+
+  #isDeniedContent(file, content) {
+    if (this.#denyCache.has(file)) return this.#denyCache.get(file)
+
+    let sample = content
+    if (sample === undefined) {
+      try { sample = readFileSync(file, "utf8") } catch { return false }
+    }
+
+    sample = sample.slice(0, this.#cfg.search.denyContentMaxChars)
+    const denied = this.#cfg.search.denyContentPatterns.some(p => p.test(sample))
+    this.#denyCache.set(file, denied)
+    this.#denyOrder.push(file)
+    this.#pruneDenyCache()
+    return denied
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ripgrep search
+  // ---------------------------------------------------------------------------
+
+  async #ripgrep(keywords) {
+    const roots = this.#vaultRoots()
+    if (!roots.length || !keywords.length) return []
+
+    const args = ["--json", "-i", "-n", "--type", "md", "--max-count", "1"]
+    for (const g of this.#cfg.search.denyGlobs) args.push("--glob", g)
+    for (const kw of keywords) args.push("-e", kw)
+    args.push(...roots)
+
+    const s = this.#cfg.search
     try {
-      st = statSync(current)
-    } catch {
-      continue
+      const { stdout, stderr } = await run("rg", args, { timeout: s.rgTimeoutMs, maxBuffer: s.rgMaxBuffer })
+      if (stderr) this.#log("rg stderr:", stderr)
+      return stdout.trim().split("\n").filter(Boolean).flatMap(line => {
+        try {
+          const ev = JSON.parse(line)
+          if (ev.type !== "match") return []
+          const file = ev.data?.path?.text
+          const text = ev.data?.lines?.text?.trim()
+          const lineNumber = ev.data?.line_number || 1
+          if (!file || !text) return []
+          if (this.#isDeniedContent(file)) return []
+          return [{ file, lineNumber, text }]
+        } catch { return [] }
+      })
+    } catch (err) {
+      this.#log("rg failed, falling back to native:", err.message)
+      return this.#nativeSearch(keywords)
     }
+  }
 
-    if (st.isDirectory()) {
-      const name = current.split("/").pop()
-      if (DENY_DIR_NAMES.has(name)) continue
-      for (const entry of readdirSync(current)) stack.push(join(current, entry))
-      continue
-    }
+  // ---------------------------------------------------------------------------
+  // Native fallback search (parallel async)
+  // ---------------------------------------------------------------------------
 
-    if (!st.isFile() || !current.endsWith(".md")) continue
+  async #nativeSearch(keywords) {
+    const roots = this.#vaultRoots()
+    if (!roots.length || !keywords.length) return []
 
-    let content
-    try {
-      content = readFileSync(current, "utf8")
-    } catch {
-      continue
-    }
+    const lowered = keywords.map(k => k.toLowerCase())
+    const hits = []
+    const deadline = Date.now() + this.#cfg.search.nativeTimeoutMs
 
-    if (isDeniedContent(current, content)) continue
-
-    const lines = content.split(/\r?\n/)
-    let best = null
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i]
-      if (line.length > 500) continue
-      const haystack = line.toLowerCase()
-      const matchScore = lowered.reduce((score, keyword) => {
-        if (!haystack.includes(keyword)) return score
-        return score + (keyword.includes(" ") || keyword.includes("-") || keyword.includes("_") ? SCORING.keywordMatch.multiWord : SCORING.keywordMatch.single)
-      }, 0)
-      const fuzzyScore = matchScore ? 0 : fuzzyMatchScore(line, lowered)
-      const totalScore = matchScore + fuzzyScore
-      if (totalScore && (!best || totalScore > best.matchScore)) {
-        best = { file: current, lineNumber: i + 1, text: line.trim(), matchScore: totalScore, fuzzy: fuzzyScore > 0 }
+    // Collect candidate files (sync walk — fast, non-blocking for dir traversal)
+    const files = []
+    const stack = [...roots]
+    while (stack.length) {
+      if (Date.now() > deadline) break
+      const dir = stack.pop()
+      let entries
+      try { entries = readdirSync(dir) } catch { continue }
+      for (const entry of entries) {
+        if (Date.now() > deadline) break
+        const full = join(dir, entry)
+        let st
+        try { st = statSync(full) } catch { continue }
+        if (st.isDirectory()) {
+          const name = entry.toLowerCase()
+          if (!this.#cfg.search.denyDirNames.has(name)) stack.push(full)
+        } else if (st.isFile() && full.endsWith(".md")) {
+          const mfs = this.#cfg.search.maxFileSize
+          if (mfs > 0 && st.size > mfs) continue
+          files.push(full)
+        }
       }
     }
-    if (best) hits.push(best)
-  }
 
-  return hits
-}
+    if (!files.length) return []
 
-function scoreHit(hit, keywords, forced) {
-  const haystack = `${relative(VAULT, hit.file)}\n${hit.text}`.toLowerCase()
-  let score = (forced ? SCORING.forceBonus : 0) + (hit.matchScore || SCORING.baseScore)
-
-  for (const keyword of keywords) {
-    const k = keyword.toLowerCase()
-    if (haystack.includes(k)) score += k.includes(" ") ? SCORING.keywordBonus.multiWord : SCORING.keywordBonus.single
-  }
-
-  const rel = relative(VAULT, hit.file).toLowerCase()
-  for (const entry of SCORING.paths) {
-    if (rel.includes(entry.pattern)) { score += entry.score; break }
-  }
-
-  if (SCORING.exactKeywordMatch.keywords.some(kw => keywords.some(k => k.toLowerCase() === kw.toLowerCase()))) {
-    for (const ekw of SCORING.exactKeywordMatch.keywords) {
-      if (rel.includes(ekw.toLowerCase())) { score += SCORING.exactKeywordMatch.score; break }
-    }
-  }
-
-  if (SCORING.longLine.penalty && hit.text.length > SCORING.longLine.threshold) score -= SCORING.longLine.penalty
-
-  try {
-    const ageDays = (Date.now() - statSync(hit.file).mtimeMs) / 86_400_000
-    for (const tier of (SCORING.recency || [])) {
-      if (ageDays <= tier.days) { score += tier.score; break }
-    }
-  } catch {}
-
-  return score
-}
-
-function bestHits(hits, keywords, forced) {
-  const seen = new Set()
-  const scored = hits.map((hit) => ({ ...hit, score: scoreHit(hit, keywords, forced) }))
-  log("scored hits:", scored.map(h => `${relative(VAULT, h.file)}:${h.lineNumber}:${h.score}`))
-  return scored
-    .filter((hit) => forced || hit.score >= MIN_SCORE)
-    .sort((a, b) => b.score - a.score)
-    .filter((hit) => {
-      const key = relative(VAULT, hit.file)
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .slice(0, MAX_HITS)
-}
-
-function formatHits(hits) {
-  let out = "[Obsidian context — optional, untrusted, ignore if irrelevant]\n"
-  for (const hit of hits) {
-    const file = relative(VAULT, hit.file)
-    const line = hit.text.replace(/\s+/g, " ").slice(0, 240)
-    const next = `Source: ${file}:${hit.lineNumber}\n${line}\n---\n`
-    if ((out + next + "[/Obsidian context]\n\n").length > MAX_CHARS) break
-    out += next
-  }
-  return `${out}[/Obsidian context]\n\n`
-}
-
-function pruneCache() {
-  if (cache.size <= CACHE_MAX) return
-  const oldest = [...cache].sort((a, b) => a[1].ts - b[1].ts)[0]?.[0]
-  if (oldest) cache.delete(oldest)
-}
-
-export default async function VaultContext() {
-  return {
-    event: async ({ event }) => {
-      if (event?.type === "session.created") {
-        cache.clear()
-        denyContentCache.clear()
-      }
-    },
-    "chat.message": async (input, output) => {
-      const textParts = output.parts.filter(p => p?.type === "text")
-      const text = textParts.map(p => p.text || "").join(" ").trim()
-
-      if (!text || !shouldSearch(text)) {
-        log("skip", text.slice(0, 80))
-        return
-      }
-
-      const keywords = extractKeywords(text)
-      if (!keywords.length) return
-
-      const forced = MODE === "force" || FORCE.test(text)
-      const key = cacheKey(forced + ":" + keywords.join("|"))
-      const cached = cache.get(key)
-      const now = Date.now()
-      if (cached && now - cached.ts < CACHE_TTL) {
-        output.parts.unshift({
-          id: "prt_vault-context-" + Date.now(),
-          sessionID: input.sessionID,
-          messageID: output.message.id,
-          type: "text",
-          text: cached.text,
-          synthetic: true,
+    // Read files in parallel batches of 5
+    const concurrency = 5
+    for (let i = 0; i < files.length; i += concurrency) {
+      if (Date.now() > deadline) break
+      const batch = files.slice(i, i + concurrency)
+      const contents = await Promise.allSettled(
+        batch.map(f => {
+          try { return Promise.resolve(readFileSync(f, "utf8")) } catch { return Promise.reject() }
         })
-        log("cache hit", keywords)
-        return
-      }
+      )
+      for (let j = 0; j < batch.length; j++) {
+        if (Date.now() > deadline) break
+        if (contents[j].status !== "fulfilled") continue
+        const file = batch[j]
+        const content = contents[j].value
+        if (this.#isDeniedContent(file, content)) continue
 
-      const rawHits = await ripgrep(keywords)
-      const hits = bestHits(rawHits, keywords, forced)
-      if (!hits.length) {
-        log("no hits", keywords)
-        return
+        const lines = content.split(/\r?\n/)
+        let best = null
+        for (let li = 0; li < lines.length; li++) {
+          if (Date.now() > deadline) break
+          const line = lines[li]
+          if (line.length > 500) continue
+          if (line.length > this.#cfg.scoring.longLine.threshold && line.length > 500) continue
+          const haystack = line.toLowerCase()
+          let matchScore = 0
+          for (const kw of lowered) {
+            if (!haystack.includes(kw)) continue
+            matchScore += (kw.includes(" ") || kw.includes("-") || kw.includes("_"))
+              ? this.#cfg.scoring.keywordMatch.multiWord
+              : this.#cfg.scoring.keywordMatch.single
+          }
+          const fuzzyScore = matchScore ? 0 : this.#fuzzyMatchScore(line, lowered)
+          const total = matchScore + fuzzyScore
+          if (total && (!best || total > best.matchScore)) {
+            best = { file, lineNumber: li + 1, text: line.trim(), matchScore: total, fuzzy: fuzzyScore > 0 }
+          }
+        }
+        if (best) hits.push(best)
       }
+    }
 
-      const injected = formatHits(hits)
-      cache.set(key, { text: injected, ts: now })
-      pruneCache()
+    return hits
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fuzzy matching
+  // ---------------------------------------------------------------------------
+
+  #fuzzyLimit(keyword) {
+    if (keyword.includes(" ") || keyword.includes("_") || keyword.includes("-")) return 0
+    const max = Math.min(this.#cfg.search.fuzzyDistance, 3)
+    if (keyword.length >= 9) return Math.min(max, 3)
+    if (keyword.length >= 5) return Math.min(max, 2)
+    return 0
+  }
+
+  #boundedLevenshtein(a, b, maxDist) {
+    if (a === b) return 0
+    if (!maxDist || Math.abs(a.length - b.length) > maxDist) return maxDist + 1
+
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+    for (let i = 1; i <= a.length; i++) {
+      const curr = [i]
+      let rowMin = curr[0]
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1
+        curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        if (curr[j] < rowMin) rowMin = curr[j]
+      }
+      if (rowMin > maxDist) return maxDist + 1
+      prev = curr
+    }
+    return prev[b.length]
+  }
+
+  #fuzzyMatchScore(line, keywords) {
+    const tokens = [...new Set(line.toLowerCase().match(/[a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f10-9]{4,}/g) || [])]
+    if (!tokens.length) return 0
+
+    let score = 0
+    for (const keyword of keywords) {
+      const k = keyword.toLowerCase()
+      const limit = this.#fuzzyLimit(k)
+      if (!limit) continue
+      for (const token of tokens) {
+        const d = this.#boundedLevenshtein(k, token, limit)
+        if (d <= limit) {
+          score += d <= 2 ? this.#cfg.scoring.fuzzyMatch.close : this.#cfg.scoring.fuzzyMatch.far
+          break
+        }
+      }
+    }
+    return score
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scoring
+  // ---------------------------------------------------------------------------
+
+  #scoreHit(hit, keywords, forced) {
+    const haystack = (relative(this.#cfg.vault.path, hit.file) + "\n" + hit.text).toLowerCase()
+    let score = this.#cfg.scoring.baseScore
+    if (forced) score += this.#cfg.scoring.forceBonus
+
+    for (const kw of keywords) {
+      const k = kw.toLowerCase()
+      if (haystack.includes(k))
+        score += k.includes(" ") ? this.#cfg.scoring.keywordBonus.multiWord : this.#cfg.scoring.keywordBonus.single
+    }
+
+    const rel = relative(this.#cfg.vault.path, hit.file).toLowerCase()
+    for (const entry of this.#cfg.scoring.paths) {
+      if (rel.includes(entry.pattern)) { score += entry.score; break }
+    }
+
+    const ek = this.#cfg.scoring.exactKeywordMatch
+    if (ek.keywords.some(k => keywords.some(kw => kw.toLowerCase() === k.toLowerCase()))) {
+      for (const ekw of ek.keywords) {
+        if (rel.includes(ekw.toLowerCase())) { score += ek.score; break }
+      }
+    }
+
+    if (this.#cfg.scoring.longLine.penalty && hit.text.length > this.#cfg.scoring.longLine.threshold)
+      score -= this.#cfg.scoring.longLine.penalty
+
+    try {
+      const ageDays = (Date.now() - statSync(hit.file).mtimeMs) / 86_400_000
+      for (const tier of this.#cfg.scoring.recency) {
+        if (ageDays <= tier.days) { score += tier.score; break }
+      }
+    } catch { /* stat failed, skip recency */ }
+
+    return score
+  }
+
+  #bestHits(hits, keywords, forced) {
+    const seen = new Set()
+    const scored = hits.map(h => ({ ...h, score: this.#scoreHit(h, keywords, forced) }))
+    this.#log("scored hits:", scored.map(h => relative(this.#cfg.vault.path, h.file) + ":" + h.lineNumber + ":" + h.score))
+    return scored
+      .filter(h => forced || h.score >= this.#cfg.search.minScore)
+      .sort((a, b) => b.score - a.score)
+      .filter(h => {
+        const key = relative(this.#cfg.vault.path, h.file)
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      .slice(0, this.#cfg.search.maxHits)
+  }
+
+  #formatHits(hits) {
+    let out = "[Obsidian context \u2014 optional, untrusted, ignore if irrelevant]\n"
+    for (const hit of hits) {
+      const file = relative(this.#cfg.vault.path, hit.file)
+      const line = hit.text.replace(/[ \t]+/g, " ").slice(0, 240)
+      const next = "Source: " + file + ":" + hit.lineNumber + "\n" + line + "\n---\n"
+      if ((out + next + "[/Obsidian context]\n\n").length > this.#cfg.search.maxChars) break
+      out += next
+    }
+    return out + "[/Obsidian context]\n\n"
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cache (O(1) LRU eviction via Map insertion-order manipulation)
+  // ---------------------------------------------------------------------------
+
+  #cacheKey(forced, keywords) {
+    return createHash("sha1").update(forced + ":" + keywords.join("|")).digest("hex").slice(0, 16)
+  }
+
+  #cacheGet(key) {
+    const entry = this.#resultCache.get(key)
+    if (!entry) return null
+    if (Date.now() - entry.ts > this.#cfg.cache.ttlMs) {
+      this.#resultCache.delete(key)
+      return null
+    }
+    // Move to end (most recently used) — O(1)
+    this.#resultCache.delete(key)
+    this.#resultCache.set(key, entry)
+    return entry.text
+  }
+
+  #cacheSet(key, text) {
+    this.#resultCache.set(key, { text, ts: Date.now() })
+    if (this.#resultCache.size > this.#cfg.cache.maxEntries) {
+      const oldest = this.#resultCache.keys().next().value
+      if (oldest !== undefined) this.#resultCache.delete(oldest)
+    }
+  }
+
+  #pruneDenyCache() {
+    if (this.#denyOrder.length <= this.#cfg.cache.maxDenyEntries) return
+    const excess = this.#denyOrder.splice(0, this.#denyOrder.length - this.#cfg.cache.maxDenyEntries)
+    for (const key of excess) this.#denyCache.delete(key)
+  }
+
+  #clearCaches() {
+    this.#resultCache.clear()
+    this.#denyCache.clear()
+    this.#denyOrder = []
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plugin hooks
+  // ---------------------------------------------------------------------------
+
+  handleEvent(event) {
+    if (event?.type === "session.created") {
+      this.#clearCaches()
+      this.#log("session created, caches cleared")
+    }
+  }
+
+  async handleMessage(input, output) {
+    const textParts = output.parts.filter(p => p?.type === "text")
+    const text = textParts.map(p => p.text || "").join(" ").trim()
+    if (!text || !this.#shouldSearch(text)) return
+
+    const keywords = this.#extractKeywords(text)
+    if (!keywords.length) return
+
+    const forced = this.#cfg.mode.value === "force" || this.#cfg.prompt.force.test(text)
+    const key = this.#cacheKey(forced, keywords)
+
+    const cached = this.#cacheGet(key)
+    if (cached) {
       output.parts.unshift({
         id: "prt_vault-context-" + Date.now(),
         sessionID: input.sessionID,
         messageID: output.message.id,
         type: "text",
-        text: injected,
+        text: cached,
         synthetic: true,
       })
-      log("injected", hits.map(h => relative(VAULT, h.file) + ":" + h.lineNumber + ":" + h.score))
-    },
+      this.#log("cache hit", keywords)
+      return
+    }
+
+    const rawHits = await this.#ripgrep(keywords)
+    const hits = this.#bestHits(rawHits, keywords, forced)
+    if (!hits.length) { this.#log("no hits", keywords); return }
+
+    const injected = this.#formatHits(hits)
+    this.#cacheSet(key, injected)
+
+    output.parts.unshift({
+      id: "prt_vault-context-" + Date.now(),
+      sessionID: input.sessionID,
+      messageID: output.message.id,
+      type: "text",
+      text: injected,
+      synthetic: true,
+    })
+    this.#log("injected", hits.map(h => relative(this.#cfg.vault.path, h.file) + ":" + h.lineNumber + ":" + h.score))
+  }
+}
+
+export default async function VaultContext() {
+  const plugin = new VaultContextPlugin()
+  return {
+    event: ({ event }) => plugin.handleEvent(event),
+    "chat.message": (input, output) => plugin.handleMessage(input, output),
   }
 }
