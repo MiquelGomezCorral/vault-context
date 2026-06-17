@@ -1,0 +1,13 @@
+{
+  "name": "opencode-vault-context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight Obsidian RAG context injector for opencode",
+  "scripts": {
+    "check": "node --check vault-context.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
