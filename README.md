@@ -1,6 +1,6 @@
-# opencode-vault-context
+# vault-context
 
-Lightweight Obsidian RAG context injector for [opencode](https://opencode.ai).
+Lightweight Obsidian RAG context injector for [opencode](https://opencode.ai) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 On every user message, the plugin searches your Obsidian vault with ripgrep, scores the hits, and prepends a small context block — so the LLM sees relevant notes without you asking.
 
@@ -328,8 +328,10 @@ Missing keywords are those that don't exist in vault content (e.g., `makefile`, 
 
 ```
 ~/.config/opencode/plugins/vault-context/
-├── vault-context.js              # plugin entry point (ESM)
+├── vault-context.js              # opencode plugin (ESM)
 ├── vault-context.config.json     # all settings (edit this)
+├── claude-code/
+│   └── vault-context-hook.sh     # Claude Code hook script
 ├── package.json                  # metadata + check script
 ├── stopwords/
 │   ├── en.json                   # 820 English stopwords
@@ -372,3 +374,76 @@ Each single-word prompt should receive vault context.
 **Keyword not found:** Check `keywords.shortTech` in config. Add your term if missing. Words under 2 characters are never searched.
 
 **Debug mode:** Set `"debug": { "enabled": true }` in config, restart opencode, check opencode logs for `[vault-context]` messages.
+
+## Using with Claude Code
+
+Claude Code's plugin system is different from opencode's — it uses shell command hooks on lifecycle events, not JavaScript plugins. The same vault-search logic works, you just wire it differently.
+
+### How Claude Code hooks work vs opencode plugins
+
+| Aspect | opencode | Claude Code |
+|--------|----------|-------------|
+| Plugin system | JS modules returning hook objects | Shell scripts called via `hooks.json` |
+| Hook for user messages | `chat.message` (mutates `output.parts`) | `UserPromptSubmit` (reads stdin, returns JSON) |
+| Context injection | `output.parts.unshift({ synthetic: true })` | `{"additionalContext": "..."}` in stdout |
+| Search engine | ripgrep via `execFile` in Node | ripgrep directly in bash |
+| Configuration | `vault-context.config.json` | Env vars (`OBSIDIAN_VAULT`, etc.) |
+
+### Setup for Claude Code
+
+**1. Clone the repo (same as opencode):**
+
+```bash
+git clone https://github.com/MiquelGomezCorral/vault-context ~/.claude/plugins/vault-context
+brew install ripgrep jq   # jq is required for the Claude Code hook
+```
+
+**2. Configure the vault path:**
+
+```bash
+export OBSIDIAN_VAULT="$HOME/Desktop/Obsidian"
+```
+
+**3. Add the hook to Claude Code settings:**
+
+Add to `~/.claude/settings.json` or `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/YOU/.claude/plugins/vault-context/claude-code/vault-context-hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Use the absolute path to the hook script. On macOS: `/Users/YOU/.claude/plugins/vault-context/claude-code/vault-context-hook.sh`.
+
+**4. Restart Claude Code and test:**
+
+```text
+python
+git
+docker
+```
+
+### Limitations (Claude Code vs opencode)
+
+- **No config file** — env vars only. Set `OBSIDIAN_VAULT`, `VAULT_CONTEXT_ALLOW_DIRS`, `VAULT_CONTEXT_MAX_HITS`.
+- **No Levenshtein typo matching** — exact keyword matching only.
+- **No stopword filtering** — basic stopword list baked into the bash script.
+- **No scoring system** — returns top N hits in rg order.
+- **No cache** — searches every prompt.
+- **No opt-out/force phrases** — always runs on every prompt (unless you add an `if` matcher).
+- **jq dependency** — Claude Code hooks receive JSON on stdin, so `jq` is required for parsing.
+
+For a full-featured experience, use opencode. The Claude Code hook is a lightweight port for users who want vault context in Claude Code without switching tools.
