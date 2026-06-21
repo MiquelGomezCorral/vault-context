@@ -1,6 +1,6 @@
 title:
-  en: vault-context: Obsidian RAG Plugin for opencode & Claude Code
-  es: vault-context: Plugin RAG de Obsidian para opencode y Claude Code
+  en: "vault-context: Obsidian RAG Plugin for opencode & Claude Code"
+  es: "vault-context: Plugin RAG de Obsidian para opencode y Claude Code"
 finished: finished
 descriptionShort:
   en: Lightweight Obsidian RAG context injector for AI coding assistants (opencode, Claude Code). On every message, searches your Obsidian vault with ripgrep, scores hits by relevance, and prepends context blocks so the LLM sees relevant notes without you asking. No API keys, no network calls.
