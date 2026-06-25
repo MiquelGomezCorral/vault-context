@@ -10,7 +10,7 @@ descriptionLong:
     vault-context is an open-source Obsidian RAG (Retrieval-Augmented Generation) plugin that bridges your Obsidian vault with AI coding assistants. On every user message, it: (1) extracts keywords from the prompt, (2) searches vault Markdown files with ripgrep (or native Node.js fallback), (3) scores hits by relevance using a configurable multi-signal scoring system (keyword matches, path bonuses, recency, fuzzy matching), and (4) prepends a small, explicitly-tagged context block. Works with both opencode (JavaScript plugin) and Claude Code (shell hook). Features: configurable search scopes, Excalidraw content filtering, prompt opt-out/force controls, zero npm dependencies, pure ESM JavaScript. No telemetry, no API calls, no data leaves your machine.
   es: |
     vault-context es un plugin RAG (Retrieval-Augmented Generation) de código abierto que conecta tu bóveda de Obsidian con asistentes de código AI. En cada mensaje del usuario: (1) extrae palabras clave del prompt, (2) busca archivos Markdown de la bóveda con ripgrep (o fallback nativo Node.js), (3) puntúa resultados por relevancia usando un sistema de scoring multi-señal configurable (coincidencias de keywords, bonus de ruta, recencia, fuzzy matching), y (4) antepone un pequeño bloque de contexto explícitamente etiquetado. Compatible con opencode (plugin JavaScript) y Claude Code (hook shell). Características: ámbitos de búsqueda configurables, filtrado de contenido Excalidraw, controles de opt-out/force en prompts, cero dependencias npm, JavaScript ESM puro. Sin telemetría, sin llamadas API, ningún dato sale de tu máquina.
-technologies: [javascript, node, git]
+technologies: [javascript, node, ai]
 tags: [other]
 date:
   en: Jun 2026
@@ -21,5 +21,6 @@ keywords:
 slug: vault-context
 order: 28
 featured: false
+
 
 
