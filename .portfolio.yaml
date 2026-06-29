@@ -19,7 +19,7 @@ keywords:
   en: [Obsidian RAG, vault search, context injection, opencode plugin, Claude Code hook, ripgrep search, note retrieval, AI assistant context, knowledge graph, Markdown search, semantic injection, scoring system]
   es: [RAG de Obsidian, búsqueda en bóveda, inyección de contexto, plugin opencode, hook Claude Code, búsqueda con ripgrep, recuperación de notas, contexto para asistente IA, grafo de conocimiento, búsqueda en Markdown, inyección semántica, sistema de scoring]
 slug: vault-context
-order: 28
+relevancy: 42
 featured: false
 
 
